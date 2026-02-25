@@ -1,0 +1,20 @@
+AUTO EMAILS
+
+GMAIL ACCOUNT:
+
+This is where emails will be sent. They currently originate from Ian's (ian.keefe@robotics.utias.utoronto.ca) email since this service cannot send properly through gmail.
+
+trailabwildfire@gmail.com
+pw: trailab2025!
+
+Using Sendgrid API (free @ 100emails a day)
+
+Acoount login:
+
+trailabwildfire@gmail.com
+pw: trailab2025!
+recovery code: 49G6ZSF5P97R6CZP9J9MXRJJ
+API KEY: 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
+
+Emails sending is controlled by STATUS_NODE
+

@@ -1,0 +1,34 @@
+STATUS NODE:
+
+Run with:
+
+ros2 run tanker_vision status_node
+
+Monitoring IMU:
+	- Gets the heartbeat from xsens_mti_node
+	- heartbeat is published once every 100 imu/data messages, which works out to 1Hz
+	- IMU states: IMU_OK and IMU_NO_HEARTBEAT
+	- IMU no heartbeat means node is down / imu is not connected (node will close if imu is not connected)
+
+Monitoring GPS (LOCK REQUIRED)
+	- Gets a heartbeat signal from nmea_to_serial_node (See PORTING NMEA TO GPSD below)
+	- this is used to verify there is a gps lock (otherwise no nmea messages published -> no heartbeat -> no timesynch / pps / triggerin images)
+	- it is also used to verify that the node responsible for passing NMEA to GPSD is working properly
+	- If the gps has a fix (pps light flashing) and this node doesn't have GPS state as GPS_OK, then check that xsens node is properly communicating (IMU_OK) 
+		- if IMU_OK, the nmea_to_serial_node likely crashed due to issues with simulated device port that it writes to, I haven't seen this since I fixed write permisions on the simulated device (check that /dev/ttyV0 exists)
+	
+Monitoring LUCID CAMERA NODE:
+- Everytime arena_camera_node recieves an image it will publish a heartbeat message
+- so long as the heartbeat is received within the last two seconds, the Camera state will be CAMERA_RECEIVING
+- If there is an error recieving an image, the heartbeat will indicate this, and status node will set Camera state to CAMERA_ERROR. Note, this is almost definitely a timeout error waiting for the image, it just means triggering is not working. Check if PPS exists
+	- Timeout errors are expected and not an issue if no PPS
+- If node is not sending heartbeat, camera state will be CAMERA_NO_HEARTBEAT. The node is not running
+
+
+This node is now running in it's own service on startup.
+sudo nano /etc/systemd/system/tanker_vision_status.service
+
+
+
+
+

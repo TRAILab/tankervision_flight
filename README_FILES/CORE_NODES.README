@@ -1,0 +1,42 @@
+START UP BOOT:
+
+ROS NODES:
+
+ALL THE NODES BELOW ARE RUN ON STARTUP BY THIS SERVICE:
+/etc/systemd/system/tanker_vision.service
+- basically calls a launch file on startup
+- the downside to combining them, if one node crashes this service will not automatically restart
+- check status / logs here
+sudo systemctl status tanker_vision.service
+
+Restart if you see an issue. You can also use the status node to check for a heartbeat from each of these nodes
+ros2 run tanker_vision status_node
+See STATUS_NODE.README for more details
+
+COMMUNICATION WITH XSENS MTI
+
+ros2 launch xsens_mti_ros2_driver xsens_mti_node.launch.py
+	- this is an untouched ROS2 driver for our Xsens GPS / INS
+	- publishes all data to separate ros topics - very clean
+	- https://github.com/xsenssupport/Xsens_MTi_ROS_Driver_and_Ntrip_Client/tree/ros2?tab=readme-ov-file
+	- NOTE - not using Ntrip client
+	- only time this will exit is if the Xsens is not connected
+	
+COMMUNICATION WITH LUCID
+
+ros2 run arena_camera_node start --ros-args -p qos_reliability:=reliable -p width:=2880 -p height:=1860 -p exposure_time:=2000.0 -p pixelformat:=rgb8 -p topic:=/cam0/image_raw -p trigger_mode:=true
+	- this node will wait until it synchs its clock over PTP with Jetson clock before it starts streaming images
+	- this is a ros2 driver provided by lucid: https://github.com/lucidvisionlabs/arena_camera_ros2
+	- some changes to ArenaCameraNode::set_nodes_trigger_mode_() to setup hardware triggering on GPIO Line2 when `-p trigger_mode:=true` is passed
+	
+PORTING NMEA TO GPSD
+
+We are forming the GPS NMEA sentences (GGA + ZDA sentence for each second) and sending it to a virtualized device ttyV0 which is paired with ttyV1 (whe  re gpsd will read from). This node subscribes to /nmea node which contains GGA, we also need to generata a ZDA message to allow for gpsd to know year date info, this is done by subscribing to imu/utctime and converting it into the correct format. For details view the python script, the command to run the node is:
+
+ros2 run tanker_vision nmea_to_serial_node
+
+Note the simulated ports are generated on sartup through the following service:
+
+nano /etc/systemd/system/socat-pty.service
+
+

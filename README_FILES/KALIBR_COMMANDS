@@ -1,0 +1,36 @@
+DOCKER COMMANDS (EVERYTHING NEEDS TO BE RUN IN KALIBR FOLDER)
+Start container:
+
+xhost +local:root
+
+FOLDER=/mnt/wildfire/calibration/data
+
+sudo docker run -it -e "DISPLAY" -e "QT_X11_NO_MITSHM=1"     -v "/tmp/.X11-unix:/tmp/.X11-unix:rw"     -v "$FOLDER:/data" kalibr
+
+nano /opt/ros/noetic/lib/python3/dist-packages/cv_bridge/__init__.py
+
+ - add import cv2 to very top of file 
+ 
+ source devel/setup.bash
+
+rosrun kalibr kalibr_calibrate_cameras  --bag /data/bc_20.bag --target /data/april_6x6_bc.yaml     --models pinhole-radtan     --topics /cam0/image_raw --bag-freq 1
+
+rosrun kalibr kalibr_calibrate_imu_camera \
+	--target /data/april_6x6_bc.yaml \
+	--imu /data/mti_imu.yaml \
+	--imu-models calibrated \
+	--cam /data/bc_final-camchain.yaml \
+	--bag /data/bc_final.bag
+
+ROS Bag
+
+ros2 bag record -o /mnt/wildfire/calibration/data/bc_1 /cam0/image_raw /imu/data
+
+ros2 bag record -o /media/trail/Wildfire/example/data/car_data_1 -a
+
+rosbags-convert --src bc_1/ --dst bc_1.bag
+
+in ROS 1 (docker)
+python3 /data/rename_plus_time.py /data/bc_temp.bag /data/bc_final.bag /imu/data /imu0
+
+

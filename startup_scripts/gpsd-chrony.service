@@ -1,0 +1,11 @@
+[Unit]
+Description=Restart gpsd and chronyd services
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/gpsd-chrony-restart.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

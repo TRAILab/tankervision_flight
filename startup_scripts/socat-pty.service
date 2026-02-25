@@ -1,0 +1,13 @@
+[Unit]
+Description=Persistent socat PTY pair
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat -d -d \
+    pty,link=/dev/ttyV0,raw,echo=0,mode=0660,group=dialout \
+    pty,link=/dev/ttyV1,raw,echo=0,mode=0660,group=dialout
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+[Unit]
+Description=ROS2 Tanker Vision Status Node
+After=network-online.target
+
+[Service]
+Type=simple
+User=trail
+WorkingDirectory=/home/trail/Desktop/TANKER_VISION/ros2_ws
+
+# Use -l (login shell), then -c to run your sourcing and finally exec ros2.
+ExecStart=/bin/bash -lc '\
+  source /opt/ros/humble/setup.bash && \
+  source /home/trail/Desktop/TANKER_VISION/ros2_ws/install/setup.bash && \
+  exec ros2 run tanker_vision status_node\
+'
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

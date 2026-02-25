@@ -1,0 +1,6 @@
+/usr/local/bin/monitor_and_upload.sh
+
+sudo nano /etc/systemd/system/upload.service
+
+Uses rsync, deletes files that were successfully upload (uploads exactly once) robust to hard shutdowns and internet loss. Continuously trying to upload anything in the upload folder and delete them to return it to empty state.
+

@@ -1,0 +1,16 @@
+[Unit]
+Description=Tanker Vision ROS2 Launch Service
+After=network.target
+
+[Service]
+User=trail
+WorkingDirectory=/home/trail/Desktop/TANKER_VISION/ros2_ws
+# Delay the start by 30 seconds
+ExecStartPre=/bin/sleep 30
+# The ExecStart line runs a bash shell that sources the ROS2 environment and your workspace setup before launching.
+ExecStart=/bin/bash -c "source /opt/ros/humble/setup.bash && source /home/trail/Desktop/TANKER_VISION/ros2_ws/install/setup.bash && ros2 launch tanker_vision tanker_vision.launch.py"
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

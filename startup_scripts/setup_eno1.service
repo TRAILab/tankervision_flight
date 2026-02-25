@@ -1,0 +1,21 @@
+[Unit]
+Description=Force MTU to 9000 and start ptp4l
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run these commands before ExecStart
+ExecStartPre=/usr/sbin/ip link set dev eno1 down
+ExecStartPre=/usr/sbin/ip link set dev eno1 mtu 9000
+ExecStartPre=/usr/sbin/ip link set dev eno1 up
+
+# Now run ptp4l as the main (long-running) process
+ExecStart=/usr/sbin/ptp4l -i eno1 -f /etc/linuxptp/ptp4l.conf -m
+
+# Restart on failure
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

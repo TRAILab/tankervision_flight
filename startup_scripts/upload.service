@@ -1,0 +1,16 @@
+[Unit]
+Description=Monitor and upload new data to trail.utias.utoronto.ca
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/monitor_and_upload.sh
+Restart=always
+RestartSec=30
+SyslogIdentifier=upload-monitor
+
+[Install]
+WantedBy=multi-user.target
+
+

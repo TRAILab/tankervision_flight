@@ -1,0 +1,38 @@
+TIME SYNCH
+
+GPS -> JETSON CLOCK 
+
+This is done similarly to the tutorial at the link below. GPSD combines kernel-PPS (dev/pps1) with GPS NMEA messages (dev/ttyV1 messages sent from nmea_to_serial_node) and passes them to chrony which treats it as a time source with 1e-7 percision.
+
+- https://gpsd.gitlab.io/gpsd/gpsd-time-service-howto.html
+
+The script that starts these two services in a way that chrony gets the timestamped PPS is in this file
+/usr/local/bin/gpsd-chrony-restart.sh
+
+Which has been used in the following systemd Service for auto startup
+
+/etc/systemd/system/gpsd-chrony.service
+
+JETSON CLOCK -> LUCID
+
+This is currently done through Hardware PTP
+
+It is important that NIC PHC is synched with Jetson clock, this is done with the following line:
+
+The following two lines were added to /usr/local/bin/gpsd-chrony-restart.sh
+
+phc2sys -s CLOCK_REALTIME -c /dev/ptp0 -O 0
+
+The actual hardware PTP is handled in :
+
+/etc/systemd/system/setup_eno1.service 
+
+To check if this is working:
+chronyc sources
+- if chrony is getting updates from PPS signal, then Jetson is being synched with GPS time
+
+ sudo systemctl status gpsd-chrony.service
+ - If phc2sys /dev/ptp0 sys offset oscillates around 0 and is relatively low (keep in mind this is nano seconds). them NIC PHC (ptp0) for ethernet port (eno1) is synched with system clock
+ - TODO, implement a check that recieves a heartbeat from camera node indicating it is in SLAVE PTP mode. It will exit this mode if it error between clocks is to big, but will resynch and this does not really effect the performance. 
+
+sudo systemctl status tanker_vision.service
