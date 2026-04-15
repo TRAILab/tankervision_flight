@@ -38,9 +38,17 @@ void ArenaCameraNode::parse_parameters_()
     gain_ = this->declare_parameter("gain", -1.0);
     is_passed_gain_ = gain_ >= 0;
 
+    nextParameterToDeclare = "gain_auto";
+    gain_auto_ = this->declare_parameter<std::string>("gain_auto", "");
+    is_passed_gain_auto_ = gain_auto_ != "";
+
     nextParameterToDeclare = "exposure_time";
     exposure_time_ = this->declare_parameter("exposure_time", -1.0);
     is_passed_exposure_time_ = exposure_time_ >= 0;
+
+    nextParameterToDeclare = "exposure_auto";
+    exposure_auto_ = this->declare_parameter<std::string>("exposure_auto", "");
+    is_passed_exposure_auto_ = exposure_auto_ != "";
 
     nextParameterToDeclare = "trigger_mode";
     trigger_mode_activated_ = this->declare_parameter("trigger_mode", false);
@@ -552,8 +560,12 @@ void ArenaCameraNode::set_nodes_roi_()
 
 void ArenaCameraNode::set_nodes_gain_()
 {
-  if (is_passed_gain_) {  // not default
-    auto nodemap = m_pDevice->GetNodeMap();
+  auto nodemap = m_pDevice->GetNodeMap();
+  if (is_passed_gain_auto_) {
+    Arena::SetNodeValue<GenICam::gcstring>(nodemap, "GainAuto", gain_auto_.c_str());
+    log_info(std::string("\tGainAuto set to ") + gain_auto_);
+  } else if (is_passed_gain_) {
+    Arena::SetNodeValue<GenICam::gcstring>(nodemap, "GainAuto", "Off");
     Arena::SetNodeValue<double>(nodemap, "Gain", gain_);
     log_info(std::string("\tGain set to ") + std::to_string(gain_));
   }
@@ -600,10 +612,14 @@ void ArenaCameraNode::set_nodes_pixelformat_()
 
 void ArenaCameraNode::set_nodes_exposure_()
 {
-  if (is_passed_exposure_time_) {
-    auto nodemap = m_pDevice->GetNodeMap();
-    // Arena::SetNodeValue<GenICam::gcstring>(nodemap, "ExposureAuto", "Off");
+  auto nodemap = m_pDevice->GetNodeMap();
+  if (is_passed_exposure_auto_) {
+    Arena::SetNodeValue<GenICam::gcstring>(nodemap, "ExposureAuto", exposure_auto_.c_str());
+    log_info(std::string("\tExposureAuto set to ") + exposure_auto_);
+  } else if (is_passed_exposure_time_) {
+    Arena::SetNodeValue<GenICam::gcstring>(nodemap, "ExposureAuto", "Off");
     Arena::SetNodeValue<double>(nodemap, "ExposureTime", exposure_time_);
+    log_info(std::string("\tExposureTime set to ") + std::to_string(exposure_time_));
   }
 }
 

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(v4l2-ctl --list-devices)",
+      "Bash(dpkg -l)",
+      "Bash(pip show *)",
+      "Read(//dev/**)"
+    ]
+  }
+}

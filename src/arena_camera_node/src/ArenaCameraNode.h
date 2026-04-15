@@ -68,8 +68,14 @@ class ArenaCameraNode : public rclcpp::Node
   double gain_;
   bool is_passed_gain_;
 
+  std::string gain_auto_;
+  bool is_passed_gain_auto_;
+
   double exposure_time_;
   bool is_passed_exposure_time_;
+
+  std::string exposure_auto_;
+  bool is_passed_exposure_auto_;
 
   std::string pixelformat_pfnc_;
   std::string pixelformat_ros_;

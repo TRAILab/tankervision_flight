@@ -31,6 +31,7 @@ setup(
             'sync_node = tanker_vision.sync_node:main',
             'image_saver = tanker_vision.image_saver:main',
             'record_data_node = tanker_vision.record_data_node:main',
+            'camera_viewer_node = tanker_vision.camera_viewer_node:main',
         ],
     },
 )

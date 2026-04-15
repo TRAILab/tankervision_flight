@@ -19,6 +19,7 @@
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
   <depend>cv_bridge</depend>
+  <exec_depend>v4l2_camera</exec_depend>
   <!-- Add any other needed dependencies here -->
 
   <!-- Test dependencies -->
