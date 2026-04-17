@@ -1,0 +1,13 @@
+[Unit]
+Description=PTP4L - Precision Time Protocol Master
+After=network.target chrony.service
+Requires=chrony.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/ptp4l -i eno1 -f /etc/linuxptp/ptp4l.conf -m -S
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
