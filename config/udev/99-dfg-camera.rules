@@ -1,0 +1,2 @@
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="199e", ATTRS{idProduct}=="8002",
+Action=="add", RUN+="/usr/local/bin/configure-dfg-camera.sh"

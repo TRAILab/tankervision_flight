@@ -1,0 +1,19 @@
+im19_mems_node:
+  ros__parameters:
+    port: /dev/im19_mems
+    baud: 115200
+    timeout: 0.05
+    frame_id: im19
+    output_dir: /home/atlas/im19_logs
+    chunk_size: 1024
+
+    stats_period_sec: 300.0
+    flush_period_sec: 5.0
+    reconnect_period_sec: 1.0
+
+    send_startup_commands: true
+    startup_commands:
+      - "AT+MEMS_OUTPUT=UART1,ON"
+
+    rotate_every_mb: 200
+    rotate_every_sec: 1800

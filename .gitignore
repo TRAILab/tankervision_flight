@@ -1,1 +1,19 @@
 .DS_Store
+
+# ROS2 colcon build artifacts
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Compiled object files
+*.o
+*.a
+*.dpp
+
+# Backup files
+*.bak
