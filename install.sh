@@ -8,6 +8,8 @@ echo "[install] Deploying configs..."
 sudo cp "$REPO_DIR/config/chrony/chrony.conf" /etc/chrony/chrony.conf
 
 # gpsd
+sudo mkdir -p /etc/systemd/system/gpsd.service.d/
+sudo cp "$REPO_DIR/config/gpsd/gpsd-service-override.conf" /etc/systemd/system/gpsd.service.d/override.conf
 sudo cp "$REPO_DIR/config/gpsd/gpsd-defaults" /etc/default/gpsd
 
 # ptp4l
