@@ -1,0 +1,15 @@
+[Unit]
+Description=TankerVision ROS2 Flight Launch
+After=network.target ptp4l.service chrony.service
+Requires=ptp4l.service
+
+[Service]
+Type=simple
+User=atlas
+Environment="HOME=/home/atlas"
+ExecStart=/bin/bash -c 'source /opt/ros/humble/setup.bash && source /home/atlas/tankervision_flight/install/setup.bash && ros2 launch tanker_vision flight.launch.py'
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

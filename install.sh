@@ -28,6 +28,7 @@ sudo chmod +x /usr/local/bin/configure-dfg-camera.sh
 sudo cp "$REPO_DIR/startup_scripts/socat-pty.service" /etc/systemd/system/
 sudo cp "$REPO_DIR/startup_scripts/gpsd-chrony.service" /etc/systemd/system/
 sudo cp "$REPO_DIR/startup_scripts/ptp4l.service" /etc/systemd/system/
+sudo cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/ /etc/systemd/system/
 
 echo "[install] Configuring Lucid Triton2 GigE camera network interface (eno1)..."
 if nmcli connection show eno1 &>/dev/null; then
@@ -53,5 +54,6 @@ sudo systemctl enable chrony
 sudo systemctl enable socat-pty.service
 sudo systemctl enable gpsd-chrony.service
 sudo systemctl enable ptp4l.service
+sudo systemctl enable tankervision.service
 
 echo "[install] Done. Reboot to verify all services start correctly."

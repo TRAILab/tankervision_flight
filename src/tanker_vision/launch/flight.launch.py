@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""
+Top-level launch file for TankerVision flight computer.
+Launches: Lucid Triton2 (arena_camera_node), IM19 IMU, analog camera (v4l2_camera)
+"""
+import os
+
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+from ament_index_python.packages import get_package_share_directory
+
+# PAL:  720x576 @ 25 fps,    Europe / Australia
+# NTSC: 720x480 @ 29.97 fps, North America / Japan
+_VIDEO_STANDARDS = {
+    'PAL':  {'image_size': [720, 576], 'time_per_frame': [1,    25]},
+    'NTSC': {'image_size': [720, 480], 'time_per_frame': [1001, 30000]},
+}
+
+
+def _launch_lucid_camera(_):
+    node = Node(
+        package='arena_camera_node',
+        executable='start',
+        name='arena_camera_node',
+        output='screen',
+        parameters=[
+            {'qos_reliability': 'reliable'},
+            {'width': 2880},
+            {'height': 1860},
+            {'exposure_time': 2000.0},
+            {'pixelformat': 'rgb8'},
+            {'topic': '/cam0/image_raw'},
+            {'trigger_mode': True},
+        ],
+    )
+    return [node]
+
+
+def _launch_analog_camera(context):
+    standard = LaunchConfiguration('video_standard').perform(context).upper()
+    device   = LaunchConfiguration('video_device').perform(context)
+
+    if standard not in _VIDEO_STANDARDS:
+        raise ValueError(
+            f"video_standard must be 'PAL' or 'NTSC', got '{standard}'"
+        )
+
+    params = _VIDEO_STANDARDS[standard]
+
+    set_standard = ExecuteProcess(
+        cmd=['v4l2-ctl', '--device', device, '--set-standard', standard],
+        output='screen',
+    )
+
+    node = Node(
+        package='v4l2_camera',
+        executable='v4l2_camera_node',
+        name='analog_camera',
+        output='screen',
+        parameters=[
+            {'video_device':    device},
+            {'image_size':      params['image_size']},
+            {'time_per_frame':  params['time_per_frame']},
+            {'camera_frame_id': 'analog_camera'},
+            {'topic':           '/cam1/image_raw'},
+        ],
+    )
+
+    return [set_standard, node]
+
+
+def generate_launch_description():
+    # IM19 IMU
+    my_bringup_dir = get_package_share_directory('my_bringup')
+    im19_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(my_bringup_dir, 'launch', 'sensors.launch.py')
+        )
+    )
+
+    arg_video_standard = DeclareLaunchArgument(
+        'video_standard',
+        default_value='PAL',
+        description="Analog video standard: 'PAL' or 'NTSC'",
+    )
+    arg_video_device = DeclareLaunchArgument(
+        'video_device',
+        default_value='/dev/video0',
+        description='V4L2 device path for analog capture card',
+    )
+
+    lucid_camera  = OpaqueFunction(function=_launch_lucid_camera)
+    analog_camera = OpaqueFunction(function=_launch_analog_camera)
+
+    return LaunchDescription([
+        arg_video_standard,
+        arg_video_device,
+        im19_launch,
+        lucid_camera,
+        analog_camera,
+    ])
+
+
+if __name__ == '__main__':
+    generate_launch_description()
