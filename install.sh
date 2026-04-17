@@ -2,6 +2,11 @@
 set -e
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+echo "[install] Installing system dependencies..."
+sudo apt install -y chrony gpsd gpsd-clients linuxptp arp-scan \
+    libopencv-dev ros-humble-cv-bridge ros-humble-nmea-msgs \
+    ros-humble-v4l2-camera
+
 echo "[install] Deploying configs..."
 
 # chrony
@@ -18,17 +23,17 @@ sudo cp "$REPO_DIR/config/ptp/ptp4l.conf" /etc/linuxptp/ptp4l.conf
 
 # udev rules
 sudo cp "$REPO_DIR/config/udev/99-dfg-camera.rules" /etc/udev/rules.d/99-dfg-camera.rules
+sudo cp "$REPO_DIR/config/udev/99-gps.rules" /etc/udev/rules.d/99-gps.rules
 sudo udevadm control --reload-rules
+sudo udevadm trigger
 
 # scripts
 sudo cp "$REPO_DIR/scripts/configure-dfg-camera.sh" /usr/local/bin/configure-dfg-camera.sh
 sudo chmod +x /usr/local/bin/configure-dfg-camera.sh
 
 # systemd services
-sudo cp "$REPO_DIR/startup_scripts/socat-pty.service" /etc/systemd/system/
-sudo cp "$REPO_DIR/startup_scripts/gpsd-chrony.service" /etc/systemd/system/
 sudo cp "$REPO_DIR/startup_scripts/ptp4l.service" /etc/systemd/system/
-sudo cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/ /etc/systemd/system/
+sudo cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/
 
 echo "[install] Configuring Lucid Triton2 GigE camera network interface (eno1)..."
 if nmcli connection show eno1 &>/dev/null; then
@@ -49,11 +54,16 @@ sudo nmcli connection up eno1 || true
 
 echo "[install] Enabling services..."
 sudo systemctl daemon-reload
-sudo systemctl enable gpsd
+sudo systemctl enable gpsd.service
+sudo systemctl disable gpsd.socket || true
+sudo systemctl mask gpsd.socket || true
 sudo systemctl enable chrony
-sudo systemctl enable socat-pty.service
-sudo systemctl enable gpsd-chrony.service
 sudo systemctl enable ptp4l.service
 sudo systemctl enable tankervision.service
+
+echo "[install] Building ROS2 workspace..."
+source /opt/ros/humble/setup.bash
+cd "$REPO_DIR"
+colcon build --symlink-install --packages-skip xsens_mti_ros2_driver
 
 echo "[install] Done. Reboot to verify all services start correctly."
