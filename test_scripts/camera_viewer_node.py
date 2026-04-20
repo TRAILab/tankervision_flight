@@ -30,8 +30,8 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
 
 # ── Topics ────────────────────────────────────────────────────────────────────
-LUCID_TOPIC  = '/arena_camera_node/images'
-ANALOG_TOPIC = '/image_raw'
+LUCID_TOPIC  = '/cam0/image_raw'
+ANALOG_TOPIC = '/cam1/image_raw'
 
 # ── QoS — match publisher (SensorDataQoS = best-effort, keep-last 5) ─────────
 _BEST_EFFORT_QOS = QoSProfile(

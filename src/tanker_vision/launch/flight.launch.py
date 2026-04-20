@@ -67,6 +67,10 @@ def _launch_analog_camera(context):
             {'camera_frame_id': 'analog_camera'},
             {'topic':           '/cam1/image_raw'},
         ],
+	remappings=[
+        ('/image_raw', '/cam1/image_raw'),
+        ('/camera_info', '/cam1/camera_info'),
+    	],
     )
 
     return [set_standard, node]
@@ -83,7 +87,7 @@ def generate_launch_description():
 
     arg_video_standard = DeclareLaunchArgument(
         'video_standard',
-        default_value='PAL',
+        default_value='NTSC',
         description="Analog video standard: 'PAL' or 'NTSC'",
     )
     arg_video_device = DeclareLaunchArgument(
