@@ -33,7 +33,7 @@ def _launch_lucid_camera(_):
             {'exposure_time': 2000.0},
             {'pixelformat': 'rgb8'},
             {'topic': '/cam0/image_raw'},
-            {'trigger_mode': True},
+            {'trigger_mode': False},
         ],
     )
     return [node]
