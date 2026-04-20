@@ -5,9 +5,9 @@ Requires=ptp4l.service
 
 [Service]
 Type=simple
-User=atlas
-Environment="HOME=/home/atlas"
-ExecStart=/bin/bash -c 'source /opt/ros/humble/setup.bash && source /home/atlas/tankervision_flight/install/setup.bash && ros2 launch tanker_vision flight.launch.py'
+User=FLIGHT_USER
+Environment="HOME=/home/FLIGHT_USER"
+ExecStart=/bin/bash -c 'source /opt/ros/humble/setup.bash && source /home/FLIGHT_USER/tankervision_flight/install/setup.bash && ros2 launch tanker_vision flight.launch.py'
 Restart=on-failure
 RestartSec=10
 

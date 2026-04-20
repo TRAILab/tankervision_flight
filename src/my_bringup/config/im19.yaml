@@ -4,7 +4,7 @@ im19_mems_node:
     baud: 115200
     timeout: 0.05
     frame_id: im19
-    output_dir: /home/atlas/im19_logs
+    output_dir: /tmp/im19_logs
     chunk_size: 1024
 
     stats_period_sec: 300.0
