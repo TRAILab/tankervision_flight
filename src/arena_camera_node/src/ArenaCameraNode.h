@@ -60,7 +60,9 @@ class ArenaCameraNode : public rclcpp::Node
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr save_trigger_sub_;
 
   std::atomic<bool> save_next_raw_{false};
-  std::string raw_save_dir_ = "home/atlas/captures/arena_raw";
+  std::string raw_save_root_ = "/mnt/storage";
+  std::filesystem::path raw_save_dir_;
+  std::filesystem::path make_raw_save_dir_();
 
   std::string serial_;
   bool is_passed_serial_;

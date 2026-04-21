@@ -199,7 +199,7 @@ void ArenaCameraNode::initialize_()
     rclcpp::QoS(10).reliable(),
     std::bind(&ArenaCameraNode::save_next_raw_callback_, this, std::placeholders::_1));
 
-  std::filesystem::create_directories(raw_save_dir_);
+  raw_save_dir_ = make_raw_save_dir_();
   log_info("Subscribed to /save_images_trigger for next-frame raw saves");
 
   std::stringstream pub_qos_info;
@@ -217,6 +217,34 @@ void ArenaCameraNode::initialize_()
                << '\n';
 
   log_info(pub_qos_info.str());
+}
+
+std::filesystem::path ArenaCameraNode::make_raw_save_dir_()
+{
+  auto now = std::chrono::system_clock::now();
+  std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+
+  std::tm local_tm{};
+  localtime_r(&now_c, &local_tm);
+
+  std::ostringstream date_stream;
+  date_stream << std::put_time(&local_tm, "%Y-%m-%d");
+
+  std::ostringstream session_stream;
+  session_stream << "session_" << std::put_time(&local_tm, "%H-%M-%S");
+
+  std::filesystem::path dir =
+      std::filesystem::path(raw_save_root_) / date_stream.str() / session_stream.str();
+
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  if (ec) {
+    throw std::runtime_error(
+        "Failed to create raw save directory: " + dir.string() + " : " + ec.message());
+  }
+
+  log_info("Created raw save directory: " + dir.string());
+  return dir;
 }
 
 void ArenaCameraNode::wait_for_device_timer_callback_()
