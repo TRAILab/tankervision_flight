@@ -174,7 +174,11 @@ time.sleep(1)
 
 cmds = [
     b'AT+MEMS_OUTPUT=UART1,ON\r\n',
+    b'AT+GNSS_OUTPUT=UART1,OFF\r\n',
+    b'AT+NAVI_OUTPUT=UART1,OFF\r\n',
+    b'AT+NASC_OUTPUT=UART1,OFF\r\n,
     b'AT+SAVE_ALL\r\n',
+
 ]
 
 for cmd in cmds:
