@@ -28,12 +28,11 @@ def _launch_lucid_camera(_):
         output='screen',
         parameters=[
             {'qos_reliability': 'reliable'},
-            {'width': 2880},
-            {'height': 1860},
-            {'exposure_time': 2000.0},
-            {'pixelformat': 'rgb8'},
+            {'width': 5320},
+            {'height': 4600},
+            {'exposure_time': 3000.0},
+            {'pixelformat': 'bayer_rggb16'},
             {'topic': '/cam0/image_raw'},
-            {'trigger_mode': False},
         ],
     )
     return [node]

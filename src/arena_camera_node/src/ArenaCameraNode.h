@@ -17,6 +17,7 @@
 #include <sensor_msgs/msg/image.hpp>  //image msg published
 #include <std_srvs/srv/trigger.hpp>   // Trigger
 #include "std_msgs/msg/string.hpp"
+#include <std_msgs/msg/empty.hpp>
 
 // arena sdk
 #include "ArenaApi.h"
@@ -44,6 +45,8 @@ class ArenaCameraNode : public rclcpp::Node
   void log_info(std::string msg) { RCLCPP_INFO(this->get_logger(), msg.c_str()); };
   void log_warn(std::string msg) { RCLCPP_WARN(this->get_logger(), msg.c_str()); };
   void log_err(std::string msg) { RCLCPP_ERROR(this->get_logger(), msg.c_str()); };
+  void save_next_raw_callback_(const std_msgs::msg::Empty::SharedPtr msg);
+  void save_raw_image_(Arena::IImage* pImage);
 
  private:
   std::shared_ptr<Arena::ISystem> m_pSystem;
@@ -53,6 +56,11 @@ class ArenaCameraNode : public rclcpp::Node
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr heartbeat_pub_;
   rclcpp::TimerBase::SharedPtr m_wait_for_device_timer_callback_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr m_trigger_an_image_srv_;
+
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr save_trigger_sub_;
+
+  std::atomic<bool> save_next_raw_{false};
+  std::string raw_save_dir_ = "home/atlas/captures/arena_raw";
 
   std::string serial_;
   bool is_passed_serial_;

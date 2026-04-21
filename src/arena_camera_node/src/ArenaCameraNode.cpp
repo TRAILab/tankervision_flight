@@ -1,23 +1,37 @@
+#include <atomic>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
+#include <std_msgs/msg/empty.hpp>
+
 #include <cstring>    // memcopy
 #include <stdexcept>  // std::runtime_err
 #include <string>
 #include <chrono>
 #include <thread>
 
+// OpenCV
+#include <opencv2/imgproc.hpp>
+#include <opencv2/core.hpp>
 
 // ROS
 #include "rmw/types.h"
+#include <sensor_msgs/image_encodings.hpp>
+#include "rclcpp/rclcpp.hpp"
 
 // ArenaSDK
 #include "ArenaCameraNode.h"
 #include "light_arena/deviceinfo_helper.h"
 #include "rclcpp_adapter/pixelformat_translation.h"
 #include "rclcpp_adapter/quilty_of_service_translation.cpp"
-#include "rclcpp/rclcpp.hpp"
+
 void ArenaCameraNode::parse_parameters_()
 {
   std::string nextParameterToDeclare = "";
   try {
+    // NOTE: serial_ is treated as a string. If your launch config passes it as
+    // an integer, convert at the call site or use declare_parameter<int> here.
     nextParameterToDeclare = "serial";
     serial_ = this->declare_parameter<std::string>("serial", "");
     is_passed_serial_ = serial_ != "";
@@ -114,9 +128,9 @@ void ArenaCameraNode::initialize_()
   // TRIGGER (service) ------------------------------------------------------
   //
   using namespace std::placeholders;
-  // m_trigger_an_image_srv_ = this->create_service<std_srvs::srv::Trigger>(
-  //     std::string(this->get_name()) + "/trigger_image",
-  //     std::bind(&ArenaCameraNode::publish_an_image_on_trigger_, this, _1, _2));
+  m_trigger_an_image_srv_ = this->create_service<std_srvs::srv::Trigger>(
+      std::string(this->get_name()) + "/save_images_trigger",
+      std::bind(&ArenaCameraNode::publish_an_image_on_trigger_, this, _1, _2));
 
   //
   // Publisher --------------------------------------------------------------
@@ -173,16 +187,20 @@ void ArenaCameraNode::initialize_()
     }
   }
 
-  // rmw_qos_history_policy_t history_policy_ = RMW_QOS_
-  // rmw_qos_history_policy_t;
-  // auto pub_qos_init = rclcpp::QoSInitialization(history_policy_, );
-
   m_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
       this->get_parameter("topic").as_string(), pub_qos_);
 
-  // Create heartbeat publisher on topic: "/<node_name>/heartbeat"
+  // Create heartbeat publisher on topic: "/camera_heartbeat"
   heartbeat_pub_ = this->create_publisher<std_msgs::msg::String>(
-  std::string("/camera_heartbeat"), 10);
+      std::string("/camera_heartbeat"), 10);
+
+  save_trigger_sub_ = this->create_subscription<std_msgs::msg::Empty>(
+    "/save_images_trigger",
+    rclcpp::QoS(10).reliable(),
+    std::bind(&ArenaCameraNode::save_next_raw_callback_, this, std::placeholders::_1));
+
+  std::filesystem::create_directories(raw_save_dir_);
+  log_info("Subscribed to /save_images_trigger for next-frame raw saves");
 
   std::stringstream pub_qos_info;
   auto pub_qos_profile = pub_qos_.get_rmw_qos_profile();
@@ -226,87 +244,179 @@ void ArenaCameraNode::wait_for_device_timer_callback_()
   }
 }
 
+void ArenaCameraNode::save_next_raw_callback_(const std_msgs::msg::Empty::SharedPtr /*msg*/)
+{
+  save_next_raw_.store(true, std::memory_order_release);
+  log_info("Received raw save trigger; next retrieved image will be saved in raw format");
+}
+
 void ArenaCameraNode::run_()
 {
   auto device = create_device_ros_();
   m_pDevice.reset(device);
   set_nodes_();
   m_pDevice->StartStream();
-  publish_images_();
 
-  // if (!trigger_mode_activated_) {
-    
-  // } else {
-  //   // else ros::spin will
-  // }
+  if (!trigger_mode_activated_) {
+    std::thread(&ArenaCameraNode::publish_images_, this).detach();
+  } else {
+    // executor remains free for callbacks/services
+  }
+}
+
+void ArenaCameraNode::save_raw_image_(Arena::IImage* pImage)
+{
+  if (!pImage) {
+    log_warn("save_raw_image_: pImage is null");
+    return;
+  }
+
+  const auto t0 = std::chrono::steady_clock::now();
+
+  const uint64_t frame_id = pImage->GetFrameId();
+  const uint64_t width = pImage->GetWidth();
+  const uint64_t height = pImage->GetHeight();
+  const uint64_t bits_per_pixel = pImage->GetBitsPerPixel();
+  const size_t bytes_per_pixel = static_cast<size_t>((bits_per_pixel + 7) / 8);
+  const size_t data_size = static_cast<size_t>(width) *
+                           static_cast<size_t>(height) *
+                           bytes_per_pixel;
+
+  const auto now = std::chrono::system_clock::now();
+  const auto now_time_t = std::chrono::system_clock::to_time_t(now);
+  const auto now_us =
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          now.time_since_epoch()).count() % 1000000;
+
+  std::tm tm_buf{};
+  localtime_r(&now_time_t, &tm_buf);
+
+  std::ostringstream name;
+  name << raw_save_dir_
+       << "/frame_" << frame_id
+       << "_" << std::put_time(&tm_buf, "%Y%m%d_%H%M%S")
+       << "_" << std::setw(6) << std::setfill('0') << now_us
+       << "_" << width << "x" << height
+       << "_" << bits_per_pixel << "bpp.raw";
+
+  const void* src = pImage->GetData();
+  if (!src) {
+    log_warn("save_raw_image_: image data pointer is null");
+    return;
+  }
+
+  std::ofstream ofs(name.str(), std::ios::binary);
+  if (!ofs) {
+    log_warn("Failed to open raw output file: " + name.str());
+    return;
+  }
+
+  ofs.write(reinterpret_cast<const char*>(src), static_cast<std::streamsize>(data_size));
+  ofs.close();
+
+  const auto t1 = std::chrono::steady_clock::now();
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+
+  log_info(
+      "Saved raw image: " + name.str() +
+      " (" + std::to_string(data_size) + " bytes, " +
+      std::to_string(ms) + " ms)");
 }
 
 void ArenaCameraNode::publish_images_()
 {
   Arena::IImage* pImage = nullptr;
+
   while (rclcpp::ok()) {
     try {
-      auto p_image_msg = std::make_unique<sensor_msgs::msg::Image>();
-      pImage = m_pDevice->GetImage(1500);
-      if (pImage == nullptr) {
-        log_info("pImage is null, skipping this frame.");
-        std_msgs::msg::String heartbeat_msg;
-        heartbeat_msg.data = "GenICam Exception occurred while grabbing an image";
-        heartbeat_pub_->publish(heartbeat_msg);
-        continue;
-      } else if (pImage->IsIncomplete()) {
-        log_info("pImage is invalid, skipping this frame.");
-        std_msgs::msg::String heartbeat_msg;
-        heartbeat_msg.data = "GenICam Exception occurred while grabbing an image";
-        heartbeat_pub_->publish(heartbeat_msg);
-        continue;
-      } else {
-        msg_form_image_(pImage, *p_image_msg);
+      pImage = m_pDevice->GetImage(1000);
+
+      if (save_next_raw_.exchange(false, std::memory_order_acq_rel)) {
+        try {
+          save_raw_image_(pImage);
+        } catch (const std::exception& e) {
+          log_warn(std::string("Failed to save raw image: ") + e.what());
+        } catch (...) {
+          log_warn("Failed to save raw image: unknown exception");
+        }
+      }
+
+      const size_t width = pImage->GetWidth();
+      const size_t height = pImage->GetHeight();
+
+      if (width != 5320 || height != 4600) {
+        log_warn(
+          "Unexpected image size: " + std::to_string(width) + "x" +
+          std::to_string(height) + ", expected 5320x4600");
+      }
+
+      log_info("Pixel format: " + std::to_string(static_cast<uint64_t>(pImage->GetPixelFormat())));
+      Arena::IImage* converted = nullptr;
+      try {
+        converted = Arena::ImageFactory::Convert(pImage, PFNC_BGR8);
+
+        const size_t conv_width = converted->GetWidth();
+        const size_t conv_height = converted->GetHeight();
+
+        cv::Mat bgr(
+          static_cast<int>(conv_height),
+          static_cast<int>(conv_width),
+          CV_8UC3,
+          (void*)converted->GetData()
+        );
+
+        cv::Mat bgr_half;
+        cv::resize(
+          bgr,
+          bgr_half,
+          cv::Size(static_cast<int>(conv_width / 2), static_cast<int>(conv_height / 2)),
+          0.0,
+          0.0,
+          cv::INTER_AREA);
+
+        auto p_image_msg = std::make_unique<sensor_msgs::msg::Image>();
+        p_image_msg->header.stamp = this->now();
+        p_image_msg->header.frame_id = std::to_string(pImage->GetFrameId());
+        p_image_msg->height = bgr_half.rows;
+        p_image_msg->width = bgr_half.cols;
+        p_image_msg->encoding = sensor_msgs::image_encodings::BGR8;
+        p_image_msg->is_bigendian = 0;
+        p_image_msg->step = static_cast<sensor_msgs::msg::Image::_step_type>(bgr_half.step);
+
+        const size_t data_size = bgr_half.total() * bgr_half.elemSize();
+        p_image_msg->data.resize(data_size);
+        std::memcpy(p_image_msg->data.data(), bgr_half.data, data_size);
+
         m_pub_->publish(std::move(p_image_msg));
 
-        // Publish heartbeat message every time an image is published.
-        GenICam::gcstring currPtpStatus = 
-        Arena::GetNodeValue<GenICam::gcstring>(m_pDevice->GetNodeMap(), "PtpStatus");
-        std_msgs::msg::String heartbeat_msg;
-        heartbeat_msg.data = "heartbeat from frame " + std::to_string(pImage->GetFrameId()) + " " + std::string(currPtpStatus);
-        heartbeat_pub_->publish(heartbeat_msg);
-
-        uint64_t timestamp_ns = pImage->GetTimestampNs();
-        uint32_t timestamp_sec = static_cast<uint32_t>(timestamp_ns / 1000000000);
-        uint32_t timestamp_nsec = static_cast<uint32_t>(timestamp_ns % 1000000000);
-
-        // Log the timestamp along with frame ID
-        log_info("Image Frame ID: " + std::to_string(pImage->GetFrameId()) +
-                " | Camera Timestamp: " + std::to_string(timestamp_sec) +
-                " sec, " + std::to_string(timestamp_nsec) + " nsec" +
-                " | Published to " + topic_);
-
-        this->m_pDevice->RequeueBuffer(pImage);
-        pImage = nullptr;
+        Arena::ImageFactory::Destroy(converted);
+        converted = nullptr;
+      } catch (...) {
+        if (converted) {
+          Arena::ImageFactory::Destroy(converted);
+          converted = nullptr;
+        }
+        throw;
       }
+
+      log_info(
+        std::string("image ") + std::to_string(pImage->GetFrameId()) +
+        " published to " + topic_);
+
+      this->m_pDevice->RequeueBuffer(pImage);
+      pImage = nullptr;
+
     } catch (std::exception& e) {
       if (pImage) {
-        log_warn(std::string("Exception occurred while publishing an image\n") +
-                 e.what());
         this->m_pDevice->RequeueBuffer(pImage);
         pImage = nullptr;
       }
+
+      log_warn(
+        std::string("Exception occurred while publishing an image\n") +
+        e.what());
     }
-    catch (GenICam::GenericException& e) {
-      auto msg =
-          std::string("GenICam Exception occurred while grabbing an image\n") +
-          e.what();
-        log_warn(msg);
-      // Publish heartbeat message every time an image is published.
-      std_msgs::msg::String heartbeat_msg;
-      heartbeat_msg.data = msg;
-      heartbeat_pub_->publish(heartbeat_msg);
-      if (pImage != nullptr) {
-        this->m_pDevice->RequeueBuffer(pImage);
-        pImage = nullptr;
-      }
-    }
-  };
+  }
 }
 
 void ArenaCameraNode::msg_form_image_(Arena::IImage* pImage,
@@ -326,14 +436,11 @@ void ArenaCameraNode::msg_form_image_(Arena::IImage* pImage,
        static_cast<uint32_t>(pImage->GetTimestampNs() % 1000000000);
     image_msg.header.frame_id = std::to_string(pImage->GetFrameId());
 
-    // Use the current ROS time as the timestamp
-    // image_msg.header.stamp = this->now();
-
     //
     // 2 ) Height
     //
     image_msg.height = height_;
-    
+
     //
     // 3 ) Width
     //
@@ -361,7 +468,7 @@ void ArenaCameraNode::msg_form_image_(Arena::IImage* pImage,
     //
     // TODO could be optimized by moving it out
     auto bits_per_pixel = pImage->GetBitsPerPixel();
-    if(bits_per_pixel <= 0) {
+    if (bits_per_pixel <= 0) {
       throw std::runtime_error("Invalid bits per pixel reported by device.");
     }
     auto pixel_length_in_bytes = bits_per_pixel / 8;
@@ -371,9 +478,9 @@ void ArenaCameraNode::msg_form_image_(Arena::IImage* pImage,
     auto width_length_in_bytes = device_width * pixel_length_in_bytes;
     image_msg.step = static_cast<sensor_msgs::msg::Image::_step_type>(width_length_in_bytes);
 
-
     //
     // 7) data
+    //
     auto image_data_length_in_bytes = width_length_in_bytes * height_;
     if (image_data_length_in_bytes == 0) {
       throw std::runtime_error("Computed image data length is zero.");
@@ -385,7 +492,7 @@ void ArenaCameraNode::msg_form_image_(Arena::IImage* pImage,
     if (!src_ptr) {
       throw std::runtime_error("pImage->GetData() returned a null pointer.");
     }
-    
+
     // Perform the copy using memcpy.
     std::memcpy(&image_msg.data[0], src_ptr, image_data_length_in_bytes);
   } catch (...) {
@@ -399,79 +506,77 @@ void ArenaCameraNode::publish_an_image_on_trigger_(
     std::shared_ptr<std_srvs::srv::Trigger::Request> request /*unused*/,
     std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
-//   if (!trigger_mode_activated_) {
-//     std::string msg =
-//         "Failed to trigger image because the device is not in trigger mode."
-//         "run `ros2 run arena_camera_node run --ros-args -p trigger_mode:=true`";
-//     log_warn(msg);
-//     response->message = msg;
-//     response->success = false;
-//   }
+  if (!trigger_mode_activated_) {
+    std::string msg =
+        "Failed to trigger image because the device is not in trigger mode."
+        "run `ros2 run arena_camera_node run --ros-args -p trigger_mode:=true`";
+    log_warn(msg);
+    response->message = msg;
+    response->success = false;
+  }
 
-//   log_info("A client triggered an image request");
+  log_info("A client triggered an image request");
 
-//   Arena::IImage* pImage = nullptr;
-//   try {
-//     // trigger
-//     bool triggerArmed = false;
-//     auto waitForTriggerCount = 10;
-//     do {
-//       // infinite loop when I step in (sometimes)
-//       triggerArmed =
-//           Arena::GetNodeValue<bool>(m_pDevice->GetNodeMap(), "TriggerArmed");
+  Arena::IImage* pImage = nullptr;
+  try {
+    // trigger
+    bool triggerArmed = false;
+    auto waitForTriggerCount = 10;
+    do {
+      // infinite loop when I step in (sometimes)
+      triggerArmed =
+          Arena::GetNodeValue<bool>(m_pDevice->GetNodeMap(), "TriggerArmed");
 
-//       if (triggerArmed == false && (waitForTriggerCount % 10) == 0) {
-//         log_info("waiting for trigger to be armed");
-//       }
+      if (triggerArmed == false && (waitForTriggerCount % 10) == 0) {
+        log_info("waiting for trigger to be armed");
+      }
 
-//     } while (triggerArmed == false);
+    } while (triggerArmed == false);
 
-//     log_debug("trigger is armed; triggering an image");
-//     Arena::ExecuteNode(m_pDevice->GetNodeMap(), "TriggerSoftware");
+    log_debug("trigger is armed; triggering an image");
+    Arena::ExecuteNode(m_pDevice->GetNodeMap(), "TriggerSoftware");
 
-//     // get image
-//     auto p_image_msg = std::make_unique<sensor_msgs::msg::Image>();
+    // get image
+    auto p_image_msg = std::make_unique<sensor_msgs::msg::Image>();
 
-//     log_debug("getting an image");
-//     pImage = m_pDevice->GetImage(10000);  // 10 sec
-//     auto msg = std::string("image ") + std::to_string(pImage->GetFrameId()) +
-//                " published to " + topic_;
-//     msg_form_image_(pImage, *p_image_msg);
-//     m_pub_->publish(std::move(p_image_msg));
+    log_debug("getting an image");
+    pImage = m_pDevice->GetImage(1000);
+    auto msg = std::string("image ") + std::to_string(pImage->GetFrameId()) +
+               " published to " + topic_;
+    msg_form_image_(pImage, *p_image_msg);
+    m_pub_->publish(std::move(p_image_msg));
+    response->message = msg;
+    response->success = true;
 
-//     response->message = msg;
-//     response->success = true;
+    log_info(msg);
+    this->m_pDevice->RequeueBuffer(pImage);
 
-//     log_info(msg);
-//     this->m_pDevice->RequeueBuffer(pImage);
+  }
 
-//   }
+  catch (std::exception& e) {
+    if (pImage) {
+      this->m_pDevice->RequeueBuffer(pImage);
+      pImage = nullptr;
+    }
+    auto msg =
+        std::string("Exception occurred while grabbing an image\n") + e.what();
+    log_warn(msg);
+    response->message = msg;
+    response->success = false;
+  }
 
-  // catch (std::exception& e) {
-  //   if (pImage) {
-  //     this->m_pDevice->RequeueBuffer(pImage);
-  //     pImage = nullptr;
-  //   }
-  //   auto msg =
-  //       std::string("Exception occurred while grabbing an image\n") + e.what();
-  //   log_warn(msg);
-  //   response->message = msg;
-  //   response->success = false;
-
-  // }
-
-  // catch (GenICam::GenericException& e) {
-  //   if (pImage) {
-  //     this->m_pDevice->RequeueBuffer(pImage);
-  //     pImage = nullptr;
-  //   }
-  //   auto msg =
-  //       std::string("GenICam Exception occurred while grabbing an image\n") +
-  //       e.what();
-  //   log_warn(msg);
-  //   response->message = msg;
-  //   response->success = false;
-  // }
+  catch (GenICam::GenericException& e) {
+    if (pImage) {
+      this->m_pDevice->RequeueBuffer(pImage);
+      pImage = nullptr;
+    }
+    auto msg =
+        std::string("GenICam Exception occurred while grabbing an image\n") +
+        e.what();
+    log_warn(msg);
+    response->message = msg;
+    response->success = false;
+  }
 }
 
 Arena::IDevice* ArenaCameraNode::create_device_ros_()
@@ -500,28 +605,48 @@ void ArenaCameraNode::set_nodes_()
   Arena::SetNodeValue<int64_t>(m_pDevice->GetNodeMap(), "PacketResendWindowFrameCount", 8);
   log_info("\tPacket resend window: 8");
   Arena::SetNodeValue<int64_t>(m_pDevice->GetNodeMap(), "DeviceLinkThroughputReserve", 10);
-  log_info("\tEthernet link reserve: 15");
-  
+  log_info("\tEthernet link reserve: 10");
+
   set_nodes_load_default_profile_();
   set_nodes_roi_();
   set_nodes_gain_();
   set_nodes_pixelformat_();
   set_nodes_exposure_();
   set_nodes_trigger_mode_();
+
+  // configure Auto Negotiate Packet Size and Packet Resend
   Arena::SetNodeValue<bool>(m_pDevice->GetTLStreamNodeMap(), "StreamAutoNegotiatePacketSize", true);
   Arena::SetNodeValue<bool>(m_pDevice->GetTLStreamNodeMap(), "StreamPacketResendEnable", true);
+
   //set_nodes_test_pattern_image_();
+
+  // PTP: enable and wait until camera is in Slave mode (60-second timeout)
   Arena::SetNodeValue(m_pDevice->GetNodeMap(), "PtpEnable", true);
   Arena::SetNodeValue(m_pDevice->GetNodeMap(), "PtpSlaveOnly", true);
-  GenICam::gcstring currPtpStatus = 
-  Arena::GetNodeValue<GenICam::gcstring>(m_pDevice->GetNodeMap(), "PtpStatus");
-	while (currPtpStatus != "Slave") {
-    log_warn("NOT IN SLAVE MODE");
-    log_warn(std::string(currPtpStatus));
-    std::this_thread::sleep_for(std::chrono::seconds(5));
-    currPtpStatus = Arena::GetNodeValue<GenICam::gcstring>(m_pDevice->GetNodeMap(), "PtpStatus");
+  {
+    const auto ptp_timeout = std::chrono::seconds(60);
+    const auto ptp_poll_interval = std::chrono::seconds(5);
+    const auto ptp_deadline = std::chrono::steady_clock::now() + ptp_timeout;
+
+    GenICam::gcstring currPtpStatus =
+        Arena::GetNodeValue<GenICam::gcstring>(m_pDevice->GetNodeMap(), "PtpStatus");
+
+    while (currPtpStatus != "Slave") {
+      if (std::chrono::steady_clock::now() >= ptp_deadline) {
+        log_warn("PTP slave sync timed out after 60 seconds (last status: " +
+                 std::string(currPtpStatus) + "). Continuing without PTP sync.");
+        break;
+      }
+      log_warn("NOT IN SLAVE MODE: " + std::string(currPtpStatus));
+      std::this_thread::sleep_for(ptp_poll_interval);
+      currPtpStatus =
+          Arena::GetNodeValue<GenICam::gcstring>(m_pDevice->GetNodeMap(), "PtpStatus");
+    }
+
+    if (currPtpStatus == "Slave") {
+      log_info("PTP status: " + std::string(currPtpStatus));
+    }
   }
-  log_info(std::string(currPtpStatus));
 }
 
 void ArenaCameraNode::set_nodes_load_default_profile_()
