@@ -9,6 +9,7 @@
 
 // std
 #include <chrono>      //chrono_literals
+#include <filesystem>
 #include <functional>  // std::bind , std::placeholders
 
 // ros
@@ -21,6 +22,11 @@
 
 // arena sdk
 #include "ArenaApi.h"
+
+#include <mutex>
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
+#include <std_msgs/msg/string.hpp>
+
 
 class ArenaCameraNode : public rclcpp::Node
 {
@@ -126,4 +132,18 @@ class ArenaCameraNode : public rclcpp::Node
       std::shared_ptr<std_srvs::srv::Trigger::Response> response);
   void msg_form_image_(Arena::IImage* pImage,
                        sensor_msgs::msg::Image& image_msg);
+
+  // Expose Parameters and Diagnostics
+    std::mutex camera_param_mutex_;
+
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
+
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr camera_diag_pub_;
+
+  rcl_interfaces::msg::SetParametersResult on_set_parameters_(
+      const std::vector<rclcpp::Parameter>& params);
+
+  void publish_camera_diagnostics_();
+  void declare_tunable_parameters_();
+  void apply_initial_tunable_parameters_();
 };

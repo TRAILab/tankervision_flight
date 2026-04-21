@@ -34,6 +34,12 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
 from std_msgs.msg import Empty
 
+import json
+from rcl_interfaces.srv import SetParameters
+from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
+from rclpy.parameter_client import AsyncParameterClient
+from std_msgs.msg import String
+
 # ── Topics ────────────────────────────────────────────────────────────────────
 LUCID_TOPIC        = '/cam0/image_raw'
 ANALOG_TOPIC       = '/cam1/image_raw'
@@ -144,6 +150,67 @@ def _in_button(x: int, y: int) -> bool:
     return BTN_X <= x <= BTN_X + BTN_W and BTN_Y <= y <= BTN_Y + BTN_H
 
 
+def _diag_cb(self, msg: String):
+    try:
+        self._lucid_diag = json.loads(msg.data)
+    except Exception as e:
+        self.get_logger().warn(f'Failed to parse Lucid diagnostics: {e}')
+
+def _set_remote_params(self, params):
+    if not self._param_client.service_is_ready():
+        self.get_logger().warn('arena_camera_node parameter service not ready')
+        return
+    self._param_client.set_parameters(params)
+
+def _p_double(name, value):
+    p = Parameter()
+    p.name = name
+    p.value = ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=float(value))
+    return p
+
+def _p_bool(name, value):
+    p = Parameter()
+    p.name = name
+    p.value = ParameterValue(type=ParameterType.PARAMETER_BOOL, bool_value=bool(value))
+    return p
+
+def _p_string(name, value):
+    p = Parameter()
+    p.name = name
+    p.value = ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=str(value))
+    return p
+
+def _p_int(name, value):
+    p = Parameter()
+    p.name = name
+    p.value = ParameterValue(type=ParameterType.PARAMETER_INTEGER, integer_value=int(value))
+    return p
+
+def _draw_lucid_params(img: np.ndarray, diag: dict) -> np.ndarray:
+    out = img.copy()
+    lines = [
+        f"ExposureAuto: {diag.get('exposure_auto', '?')}",
+        f"ExposureTime(us): {diag.get('exposure_time', '?')}",
+        f"GainAuto: {diag.get('gain_auto', '?')}",
+        f"Gain(dB): {diag.get('gain', '?')}",
+        f"TargetBrightness: {diag.get('target_brightness', '?')}",
+        f"Algorithm: {diag.get('exposure_auto_algorithm', '?')}",
+        f"Damping: {diag.get('exposure_auto_damping', '?')}",
+        f"AOI: {diag.get('auto_exposure_aoi_enable', '?')} "
+        f"{diag.get('auto_exposure_aoi_width', '?')}x{diag.get('auto_exposure_aoi_height', '?')} "
+        f"+({diag.get('auto_exposure_aoi_offset_x', '?')},{diag.get('auto_exposure_aoi_offset_y', '?')})",
+        f"Gamma: {diag.get('gamma', '?')}",
+        f"FPS Ctrl: {diag.get('acquisition_frame_rate_enable', '?')} / {diag.get('acquisition_frame_rate', '?')}",
+        f"Mean/Median: {diag.get('calculated_mean', '?')} / {diag.get('calculated_median', '?')}",
+    ]
+    y = 70
+    for line in lines:
+        cv2.putText(out, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
+        y += 22
+    return out
+
+
+
 class _MouseState:
     def __init__(self):
         self.clicked = False
@@ -188,6 +255,17 @@ class CameraViewerNode(Node):
             Empty,
             self._save_trigger_topic,
             _TRIGGER_QOS
+        )
+
+        self._lucid_diag = {}
+
+        self._param_client = AsyncParameterClient(self, '/arena_camera_node')
+
+        self.create_subscription(
+            String,
+            '/camera/lucid_diagnostics',
+            self._diag_cb,
+            10
         )
 
         self.get_logger().info(f"Publishing save triggers on {self._save_trigger_topic}")
@@ -298,6 +376,7 @@ def main(args=None):
 
             if node._show_lucid:
                 frame = _label(lucid if lucid is not None else _placeholder('Lucid'), 'Lucid')
+                frame = _draw_lucid_params(frame, node._lucid_diag)
                 frame = _fit_to_window(frame, 'Lucid Camera')
                 frame = _draw_save_button(frame, pressed)
                 cv2.imshow('Lucid Camera', frame)
@@ -309,10 +388,51 @@ def main(args=None):
                 cv2.imshow('Analog Camera', frame)
 
             key = cv2.waitKey(30) & 0xFF
-            if key == ord('s'):
+            if key == ord('s'): #SAVE FRAMES
                 node.handle_save_action(lucid, analog)
                 save_flash = 10
-            elif key in (ord('q'), 27):
+
+            #INTERACTIVE CONTROL
+            elif key == ord('a'): 
+                current = str(node._lucid_diag.get('exposure_auto', 'Off'))
+                new_val = 'Continuous' if current == 'Off' else 'Off'
+                node._set_remote_params([_p_string('exposure_auto', new_val)])
+
+            elif key == ord('z'):
+                current = str(node._lucid_diag.get('gain_auto', 'Off'))
+                new_val = 'Continuous' if current == 'Off' else 'Off'
+                node._set_remote_params([_p_string('gain_auto', new_val)])
+
+            elif key == ord('E'):
+                cur = float(node._lucid_diag.get('exposure_time', 20000.0))
+                node._set_remote_params([_p_double('exposure_time', cur + 1000.0)])
+
+            elif key == ord('e'):
+                cur = float(node._lucid_diag.get('exposure_time', 20000.0))
+                node._set_remote_params([_p_double('exposure_time', max(100.0, cur - 1000.0))])
+
+            elif key == ord('G'):
+                cur = float(node._lucid_diag.get('gain', 0.0))
+                node._set_remote_params([_p_double('gain', cur + 1.0)])
+
+            elif key == ord('g'):
+                cur = float(node._lucid_diag.get('gain', 0.0))
+                node._set_remote_params([_p_double('gain', max(0.0, cur - 1.0))])
+
+            elif key == ord('B'):
+                cur = float(node._lucid_diag.get('target_brightness', 128.0))
+                node._set_remote_params([_p_double('target_brightness', min(255.0, cur + 5.0))])
+
+            elif key == ord('b'):
+                cur = float(node._lucid_diag.get('target_brightness', 128.0))
+                node._set_remote_params([_p_double('target_brightness', max(0.0, cur - 5.0))])
+
+            elif key == ord('m'):
+                current = str(node._lucid_diag.get('exposure_auto_algorithm', 'Mean'))
+                new_val = 'Median' if current == 'Mean' else 'Mean'
+                node._set_remote_params([_p_string('exposure_auto_algorithm', new_val)])
+
+            elif key in (ord('q'), 27): #QUIT 
                 break
 
     finally:

@@ -91,6 +91,32 @@ void ArenaCameraNode::parse_parameters_()
   }
 }
 
+void ArenaCameraNode::declare_tunable_parameters_()
+{
+  this->declare_parameter<std::string>("exposure_auto", exposure_auto_.empty() ? "Off" : exposure_auto_);
+  this->declare_parameter<double>("exposure_time", exposure_time_ >= 0.0 ? exposure_time_ : 20000.0);
+
+  this->declare_parameter<std::string>("gain_auto", gain_auto_.empty() ? "Off" : gain_auto_);
+  this->declare_parameter<double>("gain", gain_ >= 0.0 ? gain_ : 0.0);
+
+  this->declare_parameter<double>("target_brightness", 128.0);
+  this->declare_parameter<double>("exposure_auto_lower_limit", 100.0);
+  this->declare_parameter<double>("exposure_auto_upper_limit", 30000.0);
+  this->declare_parameter<std::string>("exposure_auto_algorithm", "Mean");
+  this->declare_parameter<double>("exposure_auto_damping", 50.0);
+
+  this->declare_parameter<bool>("auto_exposure_aoi_enable", false);
+  this->declare_parameter<int>("auto_exposure_aoi_width", 0);
+  this->declare_parameter<int>("auto_exposure_aoi_height", 0);
+  this->declare_parameter<int>("auto_exposure_aoi_offset_x", 0);
+  this->declare_parameter<int>("auto_exposure_aoi_offset_y", 0);
+
+  this->declare_parameter<double>("gamma", 1.0);
+
+  this->declare_parameter<bool>("acquisition_frame_rate_enable", false);
+  this->declare_parameter<double>("acquisition_frame_rate", 0.0);
+}
+
 void ArenaCameraNode::initialize_()
 {
   using namespace std::chrono_literals;
@@ -194,6 +220,10 @@ void ArenaCameraNode::initialize_()
   heartbeat_pub_ = this->create_publisher<std_msgs::msg::String>(
       std::string("/camera_heartbeat"), 10);
 
+  // Create Lucid diagnostics publisher
+  camera_diag_pub_ = this->create_publisher<std_msgs::msg::String>(
+      std::string("/camera/lucid_diagnostics"), 10);
+
   save_trigger_sub_ = this->create_subscription<std_msgs::msg::Empty>(
     "/save_images_trigger",
     rclcpp::QoS(10).reliable(),
@@ -201,6 +231,13 @@ void ArenaCameraNode::initialize_()
 
   raw_save_dir_ = make_raw_save_dir_();
   log_info("Subscribed to /save_images_trigger for next-frame raw saves");
+
+  //  Declare Tunable Parameters
+  declare_tunable_parameters_();
+  apply_initial_tunable_parameters_();
+
+  param_cb_handle_ = this->add_on_set_parameters_callback(
+      std::bind(&ArenaCameraNode::on_set_parameters_, this, std::placeholders::_1));
 
   std::stringstream pub_qos_info;
   auto pub_qos_profile = pub_qos_.get_rmw_qos_profile();
@@ -247,6 +284,89 @@ std::filesystem::path ArenaCameraNode::make_raw_save_dir_()
   return dir;
 }
 
+void ArenaCameraNode::apply_initial_tunable_parameters_()
+{
+  if (!m_pDevice) {
+    return;
+  }
+
+  auto nodemap = m_pDevice->GetNodeMap();
+
+  std::lock_guard<std::mutex> lock(camera_param_mutex_);
+
+  Arena::SetNodeValue<GenICam::gcstring>(
+      nodemap, "ExposureAuto",
+      this->get_parameter("exposure_auto").as_string().c_str());
+
+  if (this->get_parameter("exposure_auto").as_string() == "Off") {
+    Arena::SetNodeValue<double>(
+        nodemap, "ExposureTime",
+        this->get_parameter("exposure_time").as_double());
+  }
+
+  Arena::SetNodeValue<GenICam::gcstring>(
+      nodemap, "GainAuto",
+      this->get_parameter("gain_auto").as_string().c_str());
+
+  if (this->get_parameter("gain_auto").as_string() == "Off") {
+    Arena::SetNodeValue<double>(
+        nodemap, "Gain",
+        this->get_parameter("gain").as_double());
+  }
+
+  Arena::SetNodeValue<double>(
+      nodemap, "TargetBrightness",
+      this->get_parameter("target_brightness").as_double());
+
+  Arena::SetNodeValue<double>(
+      nodemap, "ExposureAutoLowerLimit",
+      this->get_parameter("exposure_auto_lower_limit").as_double());
+
+  Arena::SetNodeValue<double>(
+      nodemap, "ExposureAutoUpperLimit",
+      this->get_parameter("exposure_auto_upper_limit").as_double());
+
+  Arena::SetNodeValue<GenICam::gcstring>(
+      nodemap, "ExposureAutoAlgorithm",
+      this->get_parameter("exposure_auto_algorithm").as_string().c_str());
+
+  Arena::SetNodeValue<double>(
+      nodemap, "ExposureAutoDamping",
+      this->get_parameter("exposure_auto_damping").as_double());
+
+  Arena::SetNodeValue<bool>(
+      nodemap, "AutoExposureAOIEnable",
+      this->get_parameter("auto_exposure_aoi_enable").as_bool());
+
+  const int aoi_w = this->get_parameter("auto_exposure_aoi_width").as_int();
+  const int aoi_h = this->get_parameter("auto_exposure_aoi_height").as_int();
+  const int aoi_x = this->get_parameter("auto_exposure_aoi_offset_x").as_int();
+  const int aoi_y = this->get_parameter("auto_exposure_aoi_offset_y").as_int();
+
+  if (aoi_w > 0) Arena::SetNodeValue<int64_t>(nodemap, "AutoExposureAOIWidth", aoi_w);
+  if (aoi_h > 0) Arena::SetNodeValue<int64_t>(nodemap, "AutoExposureAOIHeight", aoi_h);
+  Arena::SetNodeValue<int64_t>(nodemap, "AutoExposureAOIOffsetX", aoi_x);
+  Arena::SetNodeValue<int64_t>(nodemap, "AutoExposureAOIOffsetY", aoi_y);
+
+  Arena::SetNodeValue<double>(
+      nodemap, "Gamma",
+      this->get_parameter("gamma").as_double());
+
+  Arena::SetNodeValue<bool>(
+      nodemap, "AcquisitionFrameRateEnable",
+      this->get_parameter("acquisition_frame_rate_enable").as_bool());
+
+  if (this->get_parameter("acquisition_frame_rate_enable").as_bool()) {
+    const double fps = this->get_parameter("acquisition_frame_rate").as_double();
+    if (fps > 0.0) {
+      Arena::SetNodeValue<double>(nodemap, "AcquisitionFrameRate", fps);
+    }
+  }
+
+  publish_camera_diagnostics_();
+}
+
+
 void ArenaCameraNode::wait_for_device_timer_callback_()
 {
   // something happend while checking for cameras
@@ -276,6 +396,78 @@ void ArenaCameraNode::save_next_raw_callback_(const std_msgs::msg::Empty::Shared
 {
   save_next_raw_.store(true, std::memory_order_release);
   log_info("Received raw save trigger; next retrieved image will be saved in raw format");
+}
+
+rcl_interfaces::msg::SetParametersResult ArenaCameraNode::on_set_parameters_(
+    const std::vector<rclcpp::Parameter>& params)
+{
+  rcl_interfaces::msg::SetParametersResult result;
+  result.successful = true;
+  result.reason = "success";
+
+  if (!m_pDevice) {
+    result.successful = false;
+    result.reason = "device not initialized";
+    return result;
+  }
+
+  auto nodemap = m_pDevice->GetNodeMap();
+  std::lock_guard<std::mutex> lock(camera_param_mutex_);
+
+  try {
+    for (const auto& param : params) {
+      const auto& name = param.get_name();
+
+      if (name == "exposure_auto") {
+        Arena::SetNodeValue<GenICam::gcstring>(
+            nodemap, "ExposureAuto", param.as_string().c_str());
+      } else if (name == "exposure_time") {
+        Arena::SetNodeValue<double>(nodemap, "ExposureTime", param.as_double());
+      } else if (name == "gain_auto") {
+        Arena::SetNodeValue<GenICam::gcstring>(
+            nodemap, "GainAuto", param.as_string().c_str());
+      } else if (name == "gain") {
+        Arena::SetNodeValue<double>(nodemap, "Gain", param.as_double());
+      } else if (name == "target_brightness") {
+        Arena::SetNodeValue<double>(nodemap, "TargetBrightness", param.as_double());
+      } else if (name == "exposure_auto_lower_limit") {
+        Arena::SetNodeValue<double>(nodemap, "ExposureAutoLowerLimit", param.as_double());
+      } else if (name == "exposure_auto_upper_limit") {
+        Arena::SetNodeValue<double>(nodemap, "ExposureAutoUpperLimit", param.as_double());
+      } else if (name == "exposure_auto_algorithm") {
+        Arena::SetNodeValue<GenICam::gcstring>(
+            nodemap, "ExposureAutoAlgorithm", param.as_string().c_str());
+      } else if (name == "exposure_auto_damping") {
+        Arena::SetNodeValue<double>(nodemap, "ExposureAutoDamping", param.as_double());
+      } else if (name == "auto_exposure_aoi_enable") {
+        Arena::SetNodeValue<bool>(nodemap, "AutoExposureAOIEnable", param.as_bool());
+      } else if (name == "auto_exposure_aoi_width") {
+        Arena::SetNodeValue<int64_t>(nodemap, "AutoExposureAOIWidth", param.as_int());
+      } else if (name == "auto_exposure_aoi_height") {
+        Arena::SetNodeValue<int64_t>(nodemap, "AutoExposureAOIHeight", param.as_int());
+      } else if (name == "auto_exposure_aoi_offset_x") {
+        Arena::SetNodeValue<int64_t>(nodemap, "AutoExposureAOIOffsetX", param.as_int());
+      } else if (name == "auto_exposure_aoi_offset_y") {
+        Arena::SetNodeValue<int64_t>(nodemap, "AutoExposureAOIOffsetY", param.as_int());
+      } else if (name == "gamma") {
+        Arena::SetNodeValue<double>(nodemap, "Gamma", param.as_double());
+      } else if (name == "acquisition_frame_rate_enable") {
+        Arena::SetNodeValue<bool>(nodemap, "AcquisitionFrameRateEnable", param.as_bool());
+      } else if (name == "acquisition_frame_rate") {
+        Arena::SetNodeValue<double>(nodemap, "AcquisitionFrameRate", param.as_double());
+      }
+    }
+
+    publish_camera_diagnostics_();
+  } catch (const std::exception& e) {
+    result.successful = false;
+    result.reason = e.what();
+  } catch (const GenICam::GenericException& e) {
+    result.successful = false;
+    result.reason = e.what();
+  }
+
+  return result;
 }
 
 void ArenaCameraNode::run_()
@@ -417,6 +609,9 @@ void ArenaCameraNode::publish_images_()
 
         m_pub_->publish(std::move(p_image_msg));
 
+        this->m_pDevice->RequeueBuffer(pImage);
+        pImage = nullptr;
+
         Arena::ImageFactory::Destroy(converted);
         converted = nullptr;
       } catch (...) {
@@ -427,12 +622,6 @@ void ArenaCameraNode::publish_images_()
         throw;
       }
 
-      log_info(
-        std::string("image ") + std::to_string(pImage->GetFrameId()) +
-        " published to " + topic_);
-
-      this->m_pDevice->RequeueBuffer(pImage);
-      pImage = nullptr;
 
     } catch (std::exception& e) {
       if (pImage) {
@@ -528,6 +717,67 @@ void ArenaCameraNode::msg_form_image_(Arena::IImage* pImage,
         "Failed to create Image ROS MSG. Published Image Msg might be "
         "corrupted");
   }
+}
+
+void ArenaCameraNode::publish_camera_diagnostics_()
+{
+  if (!m_pDevice) {
+    return;
+  }
+
+  auto nodemap = m_pDevice->GetNodeMap();
+
+  std::ostringstream ss;
+  ss << "{";
+
+  try {
+    ss << "\"exposure_auto\":\""
+       << std::string(Arena::GetNodeValue<GenICam::gcstring>(nodemap, "ExposureAuto")) << "\",";
+    ss << "\"exposure_time\":"
+       << Arena::GetNodeValue<double>(nodemap, "ExposureTime") << ",";
+    ss << "\"gain_auto\":\""
+       << std::string(Arena::GetNodeValue<GenICam::gcstring>(nodemap, "GainAuto")) << "\",";
+    ss << "\"gain\":"
+       << Arena::GetNodeValue<double>(nodemap, "Gain") << ",";
+    ss << "\"target_brightness\":"
+       << Arena::GetNodeValue<double>(nodemap, "TargetBrightness") << ",";
+    ss << "\"exposure_auto_lower_limit\":"
+       << Arena::GetNodeValue<double>(nodemap, "ExposureAutoLowerLimit") << ",";
+    ss << "\"exposure_auto_upper_limit\":"
+       << Arena::GetNodeValue<double>(nodemap, "ExposureAutoUpperLimit") << ",";
+    ss << "\"exposure_auto_algorithm\":\""
+       << std::string(Arena::GetNodeValue<GenICam::gcstring>(nodemap, "ExposureAutoAlgorithm")) << "\",";
+    ss << "\"exposure_auto_damping\":"
+       << Arena::GetNodeValue<double>(nodemap, "ExposureAutoDamping") << ",";
+    ss << "\"auto_exposure_aoi_enable\":"
+       << (Arena::GetNodeValue<bool>(nodemap, "AutoExposureAOIEnable") ? "true" : "false") << ",";
+    ss << "\"auto_exposure_aoi_width\":"
+       << Arena::GetNodeValue<int64_t>(nodemap, "AutoExposureAOIWidth") << ",";
+    ss << "\"auto_exposure_aoi_height\":"
+       << Arena::GetNodeValue<int64_t>(nodemap, "AutoExposureAOIHeight") << ",";
+    ss << "\"auto_exposure_aoi_offset_x\":"
+       << Arena::GetNodeValue<int64_t>(nodemap, "AutoExposureAOIOffsetX") << ",";
+    ss << "\"auto_exposure_aoi_offset_y\":"
+       << Arena::GetNodeValue<int64_t>(nodemap, "AutoExposureAOIOffsetY") << ",";
+    ss << "\"gamma\":"
+       << Arena::GetNodeValue<double>(nodemap, "Gamma") << ",";
+    ss << "\"acquisition_frame_rate_enable\":"
+       << (Arena::GetNodeValue<bool>(nodemap, "AcquisitionFrameRateEnable") ? "true" : "false") << ",";
+    ss << "\"acquisition_frame_rate\":"
+       << Arena::GetNodeValue<double>(nodemap, "AcquisitionFrameRate") << ",";
+    ss << "\"calculated_mean\":"
+       << Arena::GetNodeValue<double>(nodemap, "CalculatedMean") << ",";
+    ss << "\"calculated_median\":"
+       << Arena::GetNodeValue<double>(nodemap, "CalculatedMedian");
+  } catch (...) {
+    ss << "\"warning\":\"partial diagnostics only\"";
+  }
+
+  ss << "}";
+
+  std_msgs::msg::String msg;
+  msg.data = ss.str();
+  camera_diag_pub_->publish(msg);
 }
 
 void ArenaCameraNode::publish_an_image_on_trigger_(
