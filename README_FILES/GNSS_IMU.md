@@ -6,7 +6,9 @@ There are three UARTs using adapters to connect with the Jetson: SparkFUN's UART
 - UART2 is for the GNSS raw data output.
 - UART3 is for the IMU raw data output.
 
-Find which physical USB port each one is using. (See more details in the fig. ![uart setup](README_FILES/images/uart.png))
+Find which physical USB port each one is using. (See more details in the fig.）
+
+<img src="images/uart.png" width="400"/>
 
 **Steps:**
 1. Change the temporal port name to a consistent name.
