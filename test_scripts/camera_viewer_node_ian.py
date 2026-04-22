@@ -16,15 +16,24 @@ Topics:
   Save trigger pub → /save_images_trigger
 
 Controls:
-  s / click Save button  - save current frames locally + publish save trigger
-  q / ESC                - quit
+  s / click Save  - save frames + publish trigger
+  a               - toggle ExposureAuto On/Off
+  z               - toggle GainAuto On/Off
+  = / -           - exposure +/- 1000us
+  [ / ]           - gain -/+ 1dB
+  , / .           - brightness -/+ 5
+  9 / 0           - gamma -/+ 0.1
+  m               - toggle Mean/Median algorithm
+  q / ESC         - quit
 """
 
 import os
-os.environ.setdefault('QT_QPA_FONTDIR', '/usr/share/fonts')  # suppress Qt font warning
-
+import re
+import json
 import threading
 from datetime import datetime
+
+os.environ.setdefault('QT_QPA_FONTDIR', '/usr/share/fonts')
 
 import cv2
 import numpy as np
@@ -32,34 +41,28 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
-from std_msgs.msg import Empty
-
-import json
+from std_msgs.msg import Empty, String
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
-from rclpy.parameter_client import AsyncParameterClient
-from std_msgs.msg import String
 
 # ── Topics ────────────────────────────────────────────────────────────────────
 LUCID_TOPIC        = '/cam0/image_raw'
 ANALOG_TOPIC       = '/cam1/image_raw'
 SAVE_TRIGGER_TOPIC = '/save_images_trigger'
 
-# ── QoS — match publisher (SensorDataQoS-ish) ────────────────────────────────
+# ── QoS ───────────────────────────────────────────────────────────────────────
 _BEST_EFFORT_QOS = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
     history=HistoryPolicy.KEEP_LAST,
     depth=10
 )
-
-# ── QoS for trigger topic ─────────────────────────────────────────────────────
 _TRIGGER_QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
     history=HistoryPolicy.KEEP_LAST,
     depth=10
 )
 
-# ── Save button geometry (pixels from top-left of displayed frame) ───────────
+# ── Save button geometry ──────────────────────────────────────────────────────
 BTN_X, BTN_Y, BTN_W, BTN_H = 10, 10, 120, 40
 
 # ── Encoding table ────────────────────────────────────────────────────────────
@@ -78,41 +81,31 @@ _ENCODING_MAP = {
 
 
 def imgmsg_to_bgr(msg: Image) -> np.ndarray:
-    """Decode a sensor_msgs/Image to BGR numpy array without cv_bridge."""
     encoding = msg.encoding.lower()
     if encoding not in _ENCODING_MAP:
         raise ValueError(f'Unsupported encoding: {msg.encoding}')
-
     dtype, channels, cvt = _ENCODING_MAP[encoding]
     arr = np.frombuffer(msg.data, dtype=dtype)
     arr = arr.reshape((msg.height, msg.width) if channels == 1
                       else (msg.height, msg.width, channels))
-
     if encoding in ('mono16', '16uc1'):
         arr = (arr >> 8).astype(np.uint8)
         return cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
-
     if cvt is not None:
         arr = cv2.cvtColor(arr, cvt)
-
     return arr
 
 
 def _fit_to_window(frame: np.ndarray, win_name: str) -> np.ndarray:
-    """Scale frame to fill current window size, preserving aspect ratio with black bars."""
     try:
         _, _, win_w, win_h = cv2.getWindowImageRect(win_name)
     except Exception:
         return frame
-
     if win_w <= 0 or win_h <= 0:
         return frame
-
     fh, fw = frame.shape[:2]
     scale = min(win_w / fw, win_h / fh)
-    new_w = int(fw * scale)
-    new_h = int(fh * scale)
-
+    new_w, new_h = int(fw * scale), int(fh * scale)
     resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
     canvas = np.zeros((win_h, win_w, 3), dtype=np.uint8)
     x_off = (win_w - new_w) // 2
@@ -123,7 +116,7 @@ def _fit_to_window(frame: np.ndarray, win_name: str) -> np.ndarray:
 
 def _draw_save_button(img: np.ndarray, pressed: bool = False) -> np.ndarray:
     out = img.copy()
-    color = (0, 180, 0) if not pressed else (0, 255, 80)
+    color = (0, 255, 80) if pressed else (0, 180, 0)
     cv2.rectangle(out, (BTN_X, BTN_Y), (BTN_X + BTN_W, BTN_Y + BTN_H), color, -1)
     cv2.rectangle(out, (BTN_X, BTN_Y), (BTN_X + BTN_W, BTN_Y + BTN_H), (255, 255, 255), 2)
     cv2.putText(out, '[ Save ]', (BTN_X + 8, BTN_Y + 27),
@@ -132,17 +125,17 @@ def _draw_save_button(img: np.ndarray, pressed: bool = False) -> np.ndarray:
 
 
 def _placeholder(label: str) -> np.ndarray:
-    h, w = 480, 640
-    img = np.zeros((h, w, 3), dtype=np.uint8)
-    cv2.putText(img, f'Waiting for {label}...', (20, h // 2),
+    img = np.zeros((480, 640, 3), dtype=np.uint8)
+    cv2.putText(img, f'Waiting for {label}...', (20, 240),
                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (180, 180, 180), 2)
     return img
 
 
 def _label(img: np.ndarray, text: str) -> np.ndarray:
     out = img.copy()
-    cv2.putText(out, text, (10, img.shape[0] - 15),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+    h = out.shape[0]
+    y = max(h - 15, 20)
+    cv2.putText(out, text, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
     return out
 
 
@@ -150,22 +143,18 @@ def _in_button(x: int, y: int) -> bool:
     return BTN_X <= x <= BTN_X + BTN_W and BTN_Y <= y <= BTN_Y + BTN_H
 
 
-def _diag_cb(self, msg: String):
-    try:
-        self._lucid_diag = json.loads(msg.data)
-    except Exception as e:
-        self.get_logger().warn(f'Failed to parse Lucid diagnostics: {e}')
-
-def _set_remote_params(self, params):
-    if not self._param_client.service_is_ready():
-        self.get_logger().warn('arena_camera_node parameter service not ready')
-        return
-    self._param_client.set_parameters(params)
+# ── Parameter helpers ─────────────────────────────────────────────────────────
 
 def _p_double(name, value):
     p = Parameter()
     p.name = name
     p.value = ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=float(value))
+    return p
+
+def _p_int(name, value):
+    p = Parameter()
+    p.name = name
+    p.value = ParameterValue(type=ParameterType.PARAMETER_INTEGER, integer_value=int(value))
     return p
 
 def _p_bool(name, value):
@@ -180,11 +169,8 @@ def _p_string(name, value):
     p.value = ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=str(value))
     return p
 
-def _p_int(name, value):
-    p = Parameter()
-    p.name = name
-    p.value = ParameterValue(type=ParameterType.PARAMETER_INTEGER, integer_value=int(value))
-    return p
+
+# ── Overlays ──────────────────────────────────────────────────────────────────
 
 def _draw_lucid_params(img: np.ndarray, diag: dict) -> np.ndarray:
     out = img.copy()
@@ -203,13 +189,56 @@ def _draw_lucid_params(img: np.ndarray, diag: dict) -> np.ndarray:
         f"FPS Ctrl: {diag.get('acquisition_frame_rate_enable', '?')} / {diag.get('acquisition_frame_rate', '?')}",
         f"Mean/Median: {diag.get('calculated_mean', '?')} / {diag.get('calculated_median', '?')}",
     ]
-    y = 70
+    y = BTN_Y + BTN_H + 25
     for line in lines:
         cv2.putText(out, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
         y += 22
     return out
 
 
+def _draw_controls(img: np.ndarray) -> np.ndarray:
+    out = img.copy()
+    lines = [
+        '── Controls ──────────────',
+        's        save frames',
+        'a        toggle ExposureAuto',
+        'z        toggle GainAuto',
+        '= / -    exposure +/- 1000us',
+        '[ / ]    gain -/+ 1dB',
+        ', / .    brightness -/+ 5',
+        '9 / 0    gamma -/+ 0.1',
+        'm        toggle Mean/Median',
+        'q / ESC  quit',
+    ]
+    font       = cv2.FONT_HERSHEY_SIMPLEX
+    scale      = 0.45
+    thickness  = 1
+    line_h     = 18
+    padding    = 10
+
+    max_w = max(cv2.getTextSize(l, font, scale, thickness)[0][0] for l in lines)
+    x = out.shape[1] - max_w - padding - 5
+    y_start = out.shape[0] - len(lines) * line_h - padding
+
+    cv2.rectangle(out,
+                  (x - 5, y_start - 15),
+                  (out.shape[1] - padding + 5, out.shape[0] - padding + 5),
+                  (0, 0, 0), -1)
+    cv2.rectangle(out,
+                  (x - 5, y_start - 15),
+                  (out.shape[1] - padding + 5, out.shape[0] - padding + 5),
+                  (80, 80, 80), 1)
+
+    y = y_start
+    for line in lines:
+        color = (100, 200, 255) if line.startswith('──') else (200, 200, 200)
+        cv2.putText(out, line, (x, y), font, scale, color, thickness)
+        y += line_h
+
+    return out
+
+
+# ── Mouse handler ─────────────────────────────────────────────────────────────
 
 class _MouseState:
     def __init__(self):
@@ -220,26 +249,29 @@ class _MouseState:
             self.clicked = True
 
 
+# ── ROS Node ──────────────────────────────────────────────────────────────────
+
 class CameraViewerNode(Node):
     def __init__(self):
         super().__init__('camera_viewer_node')
 
-        self.declare_parameter('show_lucid', True)
-        self.declare_parameter('show_analog', True)
-        self.declare_parameter('save_dir', os.path.expanduser('~/saved_frames'))
-        self.declare_parameter('save_trigger_topic', SAVE_TRIGGER_TOPIC)
+        self.declare_parameter('show_lucid',         True)
+        self.declare_parameter('show_analog',         True)
+        self.declare_parameter('save_dir',            os.path.expanduser('~/saved_frames'))
+        self.declare_parameter('save_trigger_topic',  SAVE_TRIGGER_TOPIC)
 
-        self._show_lucid = self.get_parameter('show_lucid').value
-        self._show_analog = self.get_parameter('show_analog').value
-        self._save_dir = self.get_parameter('save_dir').value
+        self._show_lucid         = self.get_parameter('show_lucid').value
+        self._show_analog        = self.get_parameter('show_analog').value
+        self._save_dir           = self.get_parameter('save_dir').value
         self._save_trigger_topic = self.get_parameter('save_trigger_topic').value
 
         if not self._show_lucid and not self._show_analog:
             raise RuntimeError("At least one of 'show_lucid' or 'show_analog' must be True")
 
-        self._lock = threading.Lock()
-        self._frame_lucid = None
+        self._lock         = threading.Lock()
+        self._frame_lucid  = None
         self._frame_analog = None
+        self._lucid_diag   = {}
 
         os.makedirs(self._save_dir, exist_ok=True)
 
@@ -251,25 +283,15 @@ class CameraViewerNode(Node):
             self.create_subscription(Image, ANALOG_TOPIC, self._analog_cb, _BEST_EFFORT_QOS)
             self.get_logger().info(f'Subscribed to {ANALOG_TOPIC} (Analog)')
 
-        self._save_trigger_pub = self.create_publisher(
-            Empty,
-            self._save_trigger_topic,
-            _TRIGGER_QOS
-        )
+        self._save_trigger_pub = self.create_publisher(Empty, self._save_trigger_topic, _TRIGGER_QOS)
+        self._param_client     = self.create_client(SetParameters, '/arena_camera_node/set_parameters')
 
-        self._lucid_diag = {}
-
-        self._param_client = AsyncParameterClient(self, '/arena_camera_node')
-
-        self.create_subscription(
-            String,
-            '/camera/lucid_diagnostics',
-            self._diag_cb,
-            10
-        )
+        self.create_subscription(String, '/camera/lucid_diagnostics', self._diag_cb, 10)
 
         self.get_logger().info(f"Publishing save triggers on {self._save_trigger_topic}")
-        self.get_logger().info("Press 's' or click [ Save ] to save frames and publish trigger. 'q'/ESC to quit.")
+        self.get_logger().info("Controls shown on Lucid window. 'q'/ESC to quit.")
+
+    # ── Callbacks ─────────────────────────────────────────────────────────────
 
     def _lucid_cb(self, msg: Image):
         try:
@@ -289,16 +311,44 @@ class CameraViewerNode(Node):
         with self._lock:
             self._frame_analog = frame
 
+    def _diag_cb(self, msg: String):
+        try:
+            self._lucid_diag = json.loads(msg.data)
+        except Exception:
+            # Salvage individual key:value pairs from malformed JSON
+            result = {}
+            for m in re.finditer(r'"(\w+)":\s*(".*?"|null|true|false|-?[\d.]+)', msg.data):
+                key, val = m.group(1), m.group(2)
+                try:
+                    result[key] = json.loads(val)
+                except Exception:
+                    result[key] = val.strip('"')
+            if result:
+                self._lucid_diag = result
+
+    # ── Parameter control ─────────────────────────────────────────────────────
+
+    def _set_remote_params(self, params):
+        if not self._param_client.service_is_ready():
+            self.get_logger().warn('arena_camera_node parameter service not ready')
+            return
+        req = SetParameters.Request()
+        req.parameters = params
+        self._param_client.call_async(req)
+
+    # ── Frame access ──────────────────────────────────────────────────────────
+
     def get_frames(self):
         with self._lock:
-            lucid = self._frame_lucid.copy() if self._frame_lucid is not None else None
+            lucid  = self._frame_lucid.copy()  if self._frame_lucid  is not None else None
             analog = self._frame_analog.copy() if self._frame_analog is not None else None
         return lucid, analog
+
+    # ── Save ──────────────────────────────────────────────────────────────────
 
     def save_frames(self, lucid, analog):
         ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
         saved = []
-
         if self._show_lucid:
             if lucid is not None:
                 path = os.path.join(self._save_dir, f'lucid_{ts}.png')
@@ -306,7 +356,6 @@ class CameraViewerNode(Node):
                 saved.append(path)
             else:
                 self.get_logger().warn('No Lucid frame to save yet')
-
         if self._show_analog:
             if analog is not None:
                 path = os.path.join(self._save_dir, f'analog_{ts}.png')
@@ -314,22 +363,19 @@ class CameraViewerNode(Node):
                 saved.append(path)
             else:
                 self.get_logger().warn('No Analog frame to save yet')
-
         for p in saved:
             self.get_logger().info(f'Saved locally: {p}')
 
     def publish_save_trigger(self):
-        msg = Empty()
-        self._save_trigger_pub.publish(msg)
+        self._save_trigger_pub.publish(Empty())
         self.get_logger().info(f'Published save trigger on {self._save_trigger_topic}')
 
     def handle_save_action(self, lucid, analog):
-        # Keep current local saving behavior
         self.save_frames(lucid, analog)
-
-        # Also notify any other node to save from within itself
         self.publish_save_trigger()
 
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 def main(args=None):
     rclpy.init(args=args)
@@ -374,26 +420,31 @@ def main(args=None):
             if save_flash > 0:
                 save_flash -= 1
 
+            # Lucid — fit first, then all overlays at display resolution
             if node._show_lucid:
-                frame = _label(lucid if lucid is not None else _placeholder('Lucid'), 'Lucid')
-                frame = _draw_lucid_params(frame, node._lucid_diag)
-                frame = _fit_to_window(frame, 'Lucid Camera')
+                raw   = lucid if lucid is not None else _placeholder('Lucid')
+                frame = _fit_to_window(raw, 'Lucid Camera')
                 frame = _draw_save_button(frame, pressed)
+                frame = _draw_lucid_params(frame, node._lucid_diag)
+                frame = _draw_controls(frame)
+                frame = _label(frame, 'Lucid')
                 cv2.imshow('Lucid Camera', frame)
 
+            # Analog — fit first, then overlays at display resolution
             if node._show_analog:
-                frame = _label(analog if analog is not None else _placeholder('Analog'), 'Analog')
-                frame = _fit_to_window(frame, 'Analog Camera')
+                raw   = analog if analog is not None else _placeholder('Analog')
+                frame = _fit_to_window(raw, 'Analog Camera')
                 frame = _draw_save_button(frame, pressed)
+                frame = _label(frame, 'Analog')
                 cv2.imshow('Analog Camera', frame)
 
             key = cv2.waitKey(30) & 0xFF
-            if key == ord('s'): #SAVE FRAMES
+
+            if key == ord('s'):
                 node.handle_save_action(lucid, analog)
                 save_flash = 10
 
-            #INTERACTIVE CONTROL
-            elif key == ord('a'): 
+            elif key == ord('a'):
                 current = str(node._lucid_diag.get('exposure_auto', 'Off'))
                 new_val = 'Continuous' if current == 'Off' else 'Off'
                 node._set_remote_params([_p_string('exposure_auto', new_val)])
@@ -403,36 +454,50 @@ def main(args=None):
                 new_val = 'Continuous' if current == 'Off' else 'Off'
                 node._set_remote_params([_p_string('gain_auto', new_val)])
 
-            elif key == ord('E'):
+            elif key == ord('='):
                 cur = float(node._lucid_diag.get('exposure_time', 20000.0))
                 node._set_remote_params([_p_double('exposure_time', cur + 1000.0)])
 
-            elif key == ord('e'):
+            elif key == ord('-'):
                 cur = float(node._lucid_diag.get('exposure_time', 20000.0))
                 node._set_remote_params([_p_double('exposure_time', max(100.0, cur - 1000.0))])
 
-            elif key == ord('G'):
+            elif key == ord(']'):
                 cur = float(node._lucid_diag.get('gain', 0.0))
                 node._set_remote_params([_p_double('gain', cur + 1.0)])
 
-            elif key == ord('g'):
+            elif key == ord('['):
                 cur = float(node._lucid_diag.get('gain', 0.0))
                 node._set_remote_params([_p_double('gain', max(0.0, cur - 1.0))])
 
-            elif key == ord('B'):
-                cur = float(node._lucid_diag.get('target_brightness', 128.0))
-                node._set_remote_params([_p_double('target_brightness', min(255.0, cur + 5.0))])
+            elif key == ord('.'):
+                cur = node._lucid_diag.get('target_brightness', 128)
+                cur = int(cur) if cur is not None else 128
+                new_val = min(255, cur + 5)
+                node.get_logger().info(f'Setting target_brightness to {new_val}')
+                node._set_remote_params([_p_int('target_brightness', new_val)])
 
-            elif key == ord('b'):
-                cur = float(node._lucid_diag.get('target_brightness', 128.0))
-                node._set_remote_params([_p_double('target_brightness', max(0.0, cur - 5.0))])
+            elif key == ord(','):
+                cur = node._lucid_diag.get('target_brightness', 128)
+                cur = int(cur) if cur is not None else 128
+                new_val = max(0, cur - 5)
+                node.get_logger().info(f'Setting target_brightness to {new_val}')
+                node._set_remote_params([_p_int('target_brightness', new_val)])
+
+            elif key == ord('0'):
+                cur = float(node._lucid_diag.get('gamma', 1.0))
+                node._set_remote_params([_p_double('gamma', round(min(3.0, cur + 0.1), 2))])
+
+            elif key == ord('9'):
+                cur = float(node._lucid_diag.get('gamma', 1.0))
+                node._set_remote_params([_p_double('gamma', round(max(0.1, cur - 0.1), 2))])
 
             elif key == ord('m'):
                 current = str(node._lucid_diag.get('exposure_auto_algorithm', 'Mean'))
                 new_val = 'Median' if current == 'Mean' else 'Mean'
                 node._set_remote_params([_p_string('exposure_auto_algorithm', new_val)])
 
-            elif key in (ord('q'), 27): #QUIT 
+            elif key in (ord('q'), 27):
                 break
 
     finally:

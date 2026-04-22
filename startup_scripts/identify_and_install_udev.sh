@@ -1,0 +1,223 @@
+#!/bin/bash
+# identify_and_install_udev.sh
+#
+# Automatically identifies which ttyUSB port is which sensor,
+# then writes the correct udev rules for this specific flight unit.
+#
+# Usage: sudo bash identify_and_install_udev.sh
+#
+# Run this once per flight unit during initial setup.
+# Safe to re-run — will overwrite existing rules.
+
+set -e
+
+RULES_FILE="/etc/udev/rules.d/99-usb-path-names.rules"
+BAUD_IMU=115200
+BAUD_GNSS=921600
+
+# ── Colours ──────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+info()    { echo -e "${GREEN}[INFO]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
+error()   { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
+
+# ── Root check ───────────────────────────────────────────────────
+if [[ $EUID -ne 0 ]]; then
+  error "This script must be run as root: sudo bash $0"
+fi
+
+# ── Remove old conflicting rules ─────────────────────────────────
+for old in /etc/udev/rules.d/99-im19.rules /etc/udev/rules.d/99-gps.rules; do
+  if [[ -f "$old" ]]; then
+    warn "Removing old rules file: $old"
+    rm "$old"
+  fi
+done
+
+# ── Find all ttyUSB ports ────────────────────────────────────────
+mapfile -t PORTS < <(ls /dev/ttyUSB* 2>/dev/null)
+
+if [[ ${#PORTS[@]} -eq 0 ]]; then
+  error "No ttyUSB devices found. Are the cables plugged in?"
+fi
+
+info "Found ${#PORTS[@]} ttyUSB ports: ${PORTS[*]}"
+
+# ── Probe each port ──────────────────────────────────────────────
+# Uses Python to read a burst of data and identify the stream type.
+
+PORT_MEMS=""
+PORT_GNSS=""
+PORT_NAVI=""
+
+info "Probing ports — this will take about $((${#PORTS[@]} * 4)) seconds..."
+
+for port in "${PORTS[@]}"; do
+  info "  Testing $port ..."
+
+  result=$(python3 - <<PY
+import serial, time, sys
+
+port = "$port"
+results = {}
+
+# Test at IMU baud first
+for baud in [$BAUD_IMU, $BAUD_GNSS]:
+    try:
+        ser = serial.Serial(port, baud, timeout=1)
+        time.sleep(0.3)
+
+        # Try waking IM19 MEMS
+        if baud == $BAUD_IMU:
+            ser.write(b'AT+MEMS_OUTPUT=UART1,ON\r\n')
+            ser.flush()
+            time.sleep(0.5)
+
+        ser.reset_input_buffer()
+        time.sleep(3)
+        data = ser.read(4096)
+        ser.close()
+
+        has_fmim = b'fmim' in data
+        has_ubx  = bytes([0xb5, 0x62]) in data
+        has_navi = b'\$GPFMI' in data or b'fmin' in data
+
+        if has_fmim:
+            print(f"MEMS:{baud}")
+            sys.exit(0)
+        elif has_ubx:
+            print(f"GNSS:{baud}")
+            sys.exit(0)
+        elif has_navi:
+            print(f"NAVI:{baud}")
+            sys.exit(0)
+
+    except Exception as e:
+        pass
+
+print("UNKNOWN:0")
+PY
+)
+
+  stream_type=$(echo "$result" | cut -d: -f1)
+  baud=$(echo "$result" | cut -d: -f2)
+
+  case "$stream_type" in
+    MEMS)
+      info "    -> IM19 MEMS (fmim packets) @ ${baud} baud"
+      PORT_MEMS="$port"
+      ;;
+    GNSS)
+      info "    -> GNSS raw UBX (b562 packets) @ ${baud} baud"
+      PORT_GNSS="$port"
+      ;;
+    NAVI)
+      info "    -> IM19 NAVI (\$GPFMI sentences) @ ${baud} baud"
+      PORT_NAVI="$port"
+      ;;
+    *)
+      warn "    -> Unknown/silent port"
+      ;;
+  esac
+done
+
+# ── Assign silent port as NAVI if not yet found ──────────────────
+# NAVI port (UART3) is often silent until GNSS fusion is working.
+# If we found MEMS and GNSS but not NAVI, assign the remaining port.
+if [[ -z "$PORT_NAVI" && -n "$PORT_MEMS" && -n "$PORT_GNSS" ]]; then
+  for port in "${PORTS[@]}"; do
+    if [[ "$port" != "$PORT_MEMS" && "$port" != "$PORT_GNSS" ]]; then
+      PORT_NAVI="$port"
+      warn "NAVI port not actively streaming — assigning remaining port: $PORT_NAVI"
+      break
+    fi
+  done
+fi
+
+# ── Validate we found all three ──────────────────────────────────
+echo ""
+info "Results:"
+info "  MEMS (im19_mems): ${PORT_MEMS:-NOT FOUND}"
+info "  GNSS (gnss_raw):  ${PORT_GNSS:-NOT FOUND}"
+info "  NAVI (im19_navi): ${PORT_NAVI:-NOT FOUND}"
+echo ""
+
+MISSING=0
+[[ -z "$PORT_MEMS" ]] && { warn "Could not identify IM19 MEMS port"; MISSING=1; }
+[[ -z "$PORT_GNSS" ]] && { warn "Could not identify GNSS raw port";  MISSING=1; }
+[[ -z "$PORT_NAVI" ]] && { warn "Could not identify IM19 NAVI port"; MISSING=1; }
+
+if [[ $MISSING -eq 1 ]]; then
+  error "Could not identify all ports. Check cables and try again."
+fi
+
+# ── Get ID_PATH for each port ────────────────────────────────────
+get_id_path() {
+  udevadm info -q property -n "$1" | grep '^ID_PATH=' | cut -d= -f2
+}
+
+PATH_MEMS=$(get_id_path "$PORT_MEMS")
+PATH_GNSS=$(get_id_path "$PORT_GNSS")
+PATH_NAVI=$(get_id_path "$PORT_NAVI")
+
+[[ -z "$PATH_MEMS" ]] && error "Could not get ID_PATH for $PORT_MEMS"
+[[ -z "$PATH_GNSS" ]] && error "Could not get ID_PATH for $PORT_GNSS"
+[[ -z "$PATH_NAVI" ]] && error "Could not get ID_PATH for $PORT_NAVI"
+
+info "ID_PATH values:"
+info "  $PORT_MEMS -> $PATH_MEMS"
+info "  $PORT_GNSS -> $PATH_GNSS"
+info "  $PORT_NAVI -> $PATH_NAVI"
+
+# ── Write udev rules ─────────────────────────────────────────────
+cat > "$RULES_FILE" << EOF
+# Auto-generated by identify_and_install_udev.sh
+# Generated: $(date)
+# Unit: $(hostname)
+
+# IM19 MEMS raw output (UART1) - was $PORT_MEMS
+SUBSYSTEM=="tty", ENV{ID_PATH}=="$PATH_MEMS", SYMLINK+="im19_mems"
+
+# GNSS raw UBX output (ZED-F9P UART2) - was $PORT_GNSS
+SUBSYSTEM=="tty", ENV{ID_PATH}=="$PATH_GNSS", SYMLINK+="gnss_raw"
+
+# IM19 NAVI fused output (UART3) - was $PORT_NAVI
+SUBSYSTEM=="tty", ENV{ID_PATH}=="$PATH_NAVI", SYMLINK+="im19_navi"
+EOF
+
+info "Written: $RULES_FILE"
+
+# ── Reload and apply ─────────────────────────────────────────────
+udevadm control --reload-rules
+
+for port in "${PORTS[@]}"; do
+  udevadm trigger --action=add "$port"
+done
+
+sleep 1
+
+# ── Verify ───────────────────────────────────────────────────────
+echo ""
+info "Verifying symlinks:"
+OK=1
+for sym in im19_mems gnss_raw im19_navi; do
+  if [[ -L "/dev/$sym" ]]; then
+    target=$(readlink /dev/$sym)
+    info "  /dev/$sym -> $target  ✓"
+  else
+    warn "  /dev/$sym -> NOT FOUND  ✗"
+    OK=0
+  fi
+done
+
+echo ""
+if [[ $OK -eq 1 ]]; then
+  info "All symlinks created successfully."
+  info "This unit is ready. Rules saved to $RULES_FILE"
+else
+  warn "Some symlinks missing. Try unplugging and replugging the USB hub, then run again."
+fi

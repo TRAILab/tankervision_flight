@@ -93,28 +93,30 @@ void ArenaCameraNode::parse_parameters_()
 
 void ArenaCameraNode::declare_tunable_parameters_()
 {
-  this->declare_parameter<std::string>("exposure_auto", exposure_auto_.empty() ? "Off" : exposure_auto_);
-  this->declare_parameter<double>("exposure_time", exposure_time_ >= 0.0 ? exposure_time_ : 20000.0);
+  auto declare_if_new = [this](auto name, auto default_val) {
+    if (!this->has_parameter(name))
+      this->declare_parameter(name, default_val);
+  };
 
-  this->declare_parameter<std::string>("gain_auto", gain_auto_.empty() ? "Off" : gain_auto_);
-  this->declare_parameter<double>("gain", gain_ >= 0.0 ? gain_ : 0.0);
+  declare_if_new("exposure_auto",   exposure_auto_.empty()  ? "Off" : exposure_auto_);
+  declare_if_new("exposure_time",   exposure_time_ >= 0.0   ? exposure_time_ : 20000.0);
+  declare_if_new("gain_auto",       gain_auto_.empty()      ? "Off" : gain_auto_);
+  declare_if_new("gain",            gain_ >= 0.0            ? gain_ : 0.0);
 
-  this->declare_parameter<double>("target_brightness", 128.0);
-  this->declare_parameter<double>("exposure_auto_lower_limit", 100.0);
-  this->declare_parameter<double>("exposure_auto_upper_limit", 30000.0);
-  this->declare_parameter<std::string>("exposure_auto_algorithm", "Mean");
-  this->declare_parameter<double>("exposure_auto_damping", 50.0);
-
-  this->declare_parameter<bool>("auto_exposure_aoi_enable", false);
-  this->declare_parameter<int>("auto_exposure_aoi_width", 0);
-  this->declare_parameter<int>("auto_exposure_aoi_height", 0);
-  this->declare_parameter<int>("auto_exposure_aoi_offset_x", 0);
-  this->declare_parameter<int>("auto_exposure_aoi_offset_y", 0);
-
-  this->declare_parameter<double>("gamma", 1.0);
-
-  this->declare_parameter<bool>("acquisition_frame_rate_enable", false);
-  this->declare_parameter<double>("acquisition_frame_rate", 0.0);
+  // these are new so they're fine as-is
+  declare_if_new("target_brightness",           128);
+  declare_if_new("exposure_auto_lower_limit",   100.0);
+  declare_if_new("exposure_auto_upper_limit",   30000.0);
+  declare_if_new("exposure_auto_algorithm",     std::string("Mean"));
+  declare_if_new("exposure_auto_damping",       50.0);
+  declare_if_new("auto_exposure_aoi_enable",    false);
+  declare_if_new("auto_exposure_aoi_width",     0);
+  declare_if_new("auto_exposure_aoi_height",    0);
+  declare_if_new("auto_exposure_aoi_offset_x",  0);
+  declare_if_new("auto_exposure_aoi_offset_y",  0);
+  declare_if_new("gamma",                       1.0);
+  declare_if_new("acquisition_frame_rate_enable", false);
+  declare_if_new("acquisition_frame_rate",      0.0);
 }
 
 void ArenaCameraNode::initialize_()
@@ -314,9 +316,8 @@ void ArenaCameraNode::apply_initial_tunable_parameters_()
         this->get_parameter("gain").as_double());
   }
 
-  Arena::SetNodeValue<double>(
-      nodemap, "TargetBrightness",
-      this->get_parameter("target_brightness").as_double());
+  Arena::SetNodeValue<int64_t>(nodemap, "TargetBrightness",
+    static_cast<int64_t>(this->get_parameter("target_brightness").as_double()));
 
   Arena::SetNodeValue<double>(
       nodemap, "ExposureAutoLowerLimit",
@@ -429,7 +430,8 @@ rcl_interfaces::msg::SetParametersResult ArenaCameraNode::on_set_parameters_(
       } else if (name == "gain") {
         Arena::SetNodeValue<double>(nodemap, "Gain", param.as_double());
       } else if (name == "target_brightness") {
-        Arena::SetNodeValue<double>(nodemap, "TargetBrightness", param.as_double());
+        Arena::SetNodeValue<int64_t>(nodemap, "TargetBrightness",
+        static_cast<int64_t>(param.as_double()));
       } else if (name == "exposure_auto_lower_limit") {
         Arena::SetNodeValue<double>(nodemap, "ExposureAutoLowerLimit", param.as_double());
       } else if (name == "exposure_auto_upper_limit") {
@@ -721,57 +723,60 @@ void ArenaCameraNode::msg_form_image_(Arena::IImage* pImage,
 
 void ArenaCameraNode::publish_camera_diagnostics_()
 {
-  if (!m_pDevice) {
-    return;
-  }
+  if (!m_pDevice) return;
 
   auto nodemap = m_pDevice->GetNodeMap();
-
   std::ostringstream ss;
   ss << "{";
 
-  try {
-    ss << "\"exposure_auto\":\""
-       << std::string(Arena::GetNodeValue<GenICam::gcstring>(nodemap, "ExposureAuto")) << "\",";
-    ss << "\"exposure_time\":"
-       << Arena::GetNodeValue<double>(nodemap, "ExposureTime") << ",";
-    ss << "\"gain_auto\":\""
-       << std::string(Arena::GetNodeValue<GenICam::gcstring>(nodemap, "GainAuto")) << "\",";
-    ss << "\"gain\":"
-       << Arena::GetNodeValue<double>(nodemap, "Gain") << ",";
-    ss << "\"target_brightness\":"
-       << Arena::GetNodeValue<double>(nodemap, "TargetBrightness") << ",";
-    ss << "\"exposure_auto_lower_limit\":"
-       << Arena::GetNodeValue<double>(nodemap, "ExposureAutoLowerLimit") << ",";
-    ss << "\"exposure_auto_upper_limit\":"
-       << Arena::GetNodeValue<double>(nodemap, "ExposureAutoUpperLimit") << ",";
-    ss << "\"exposure_auto_algorithm\":\""
-       << std::string(Arena::GetNodeValue<GenICam::gcstring>(nodemap, "ExposureAutoAlgorithm")) << "\",";
-    ss << "\"exposure_auto_damping\":"
-       << Arena::GetNodeValue<double>(nodemap, "ExposureAutoDamping") << ",";
-    ss << "\"auto_exposure_aoi_enable\":"
-       << (Arena::GetNodeValue<bool>(nodemap, "AutoExposureAOIEnable") ? "true" : "false") << ",";
-    ss << "\"auto_exposure_aoi_width\":"
-       << Arena::GetNodeValue<int64_t>(nodemap, "AutoExposureAOIWidth") << ",";
-    ss << "\"auto_exposure_aoi_height\":"
-       << Arena::GetNodeValue<int64_t>(nodemap, "AutoExposureAOIHeight") << ",";
-    ss << "\"auto_exposure_aoi_offset_x\":"
-       << Arena::GetNodeValue<int64_t>(nodemap, "AutoExposureAOIOffsetX") << ",";
-    ss << "\"auto_exposure_aoi_offset_y\":"
-       << Arena::GetNodeValue<int64_t>(nodemap, "AutoExposureAOIOffsetY") << ",";
-    ss << "\"gamma\":"
-       << Arena::GetNodeValue<double>(nodemap, "Gamma") << ",";
-    ss << "\"acquisition_frame_rate_enable\":"
-       << (Arena::GetNodeValue<bool>(nodemap, "AcquisitionFrameRateEnable") ? "true" : "false") << ",";
-    ss << "\"acquisition_frame_rate\":"
-       << Arena::GetNodeValue<double>(nodemap, "AcquisitionFrameRate") << ",";
-    ss << "\"calculated_mean\":"
-       << Arena::GetNodeValue<double>(nodemap, "CalculatedMean") << ",";
-    ss << "\"calculated_median\":"
-       << Arena::GetNodeValue<double>(nodemap, "CalculatedMedian");
-  } catch (...) {
-    ss << "\"warning\":\"partial diagnostics only\"";
-  }
+  auto get_double = [&](const char* key, const char* node) {
+    try {
+      ss << "\"" << key << "\":" << Arena::GetNodeValue<double>(nodemap, node);
+    } catch (...) {
+      ss << "\"" << key << "\":null";
+    }
+  };
+  auto get_string = [&](const char* key, const char* node) {
+    try {
+      ss << "\"" << key << "\":\"" << std::string(Arena::GetNodeValue<GenICam::gcstring>(nodemap, node)) << "\"";
+    } catch (...) {
+      ss << "\"" << key << "\":null";
+    }
+  };
+  auto get_bool = [&](const char* key, const char* node) {
+    try {
+      ss << "\"" << key << "\":" << (Arena::GetNodeValue<bool>(nodemap, node) ? "true" : "false");
+    } catch (...) {
+      ss << "\"" << key << "\":null";
+    }
+  };
+  auto get_int = [&](const char* key, const char* node) {
+    try {
+      ss << "\"" << key << "\":" << Arena::GetNodeValue<int64_t>(nodemap, node);
+    } catch (...) {
+      ss << "\"" << key << "\":null";
+    }
+  };
+
+  get_string("exposure_auto",            "ExposureAuto");            ss << ",";
+  get_double("exposure_time",            "ExposureTime");            ss << ",";
+  get_string("gain_auto",                "GainAuto");                ss << ",";
+  get_double("gain",                     "Gain");                    ss << ",";
+  get_int   ("target_brightness",        "TargetBrightness");        ss << ",";
+  get_double("exposure_auto_lower_limit","ExposureAutoLowerLimit");  ss << ",";
+  get_double("exposure_auto_upper_limit","ExposureAutoUpperLimit");  ss << ",";
+  get_string("exposure_auto_algorithm",  "ExposureAutoAlgorithm");   ss << ",";
+  get_double("exposure_auto_damping",    "ExposureAutoDamping");     ss << ",";
+  get_bool  ("auto_exposure_aoi_enable", "AutoExposureAOIEnable");   ss << ",";
+  get_int   ("auto_exposure_aoi_width",  "AutoExposureAOIWidth");    ss << ",";
+  get_int   ("auto_exposure_aoi_height", "AutoExposureAOIHeight");   ss << ",";
+  get_int   ("auto_exposure_aoi_offset_x","AutoExposureAOIOffsetX"); ss << ",";
+  get_int   ("auto_exposure_aoi_offset_y","AutoExposureAOIOffsetY"); ss << ",";
+  get_double("gamma",                    "Gamma");                   ss << ",";
+  get_bool  ("acquisition_frame_rate_enable","AcquisitionFrameRateEnable"); ss << ",";
+  get_double("acquisition_frame_rate",   "AcquisitionFrameRate");    ss << ",";
+  get_double("calculated_mean",          "CalculatedMean");          ss << ",";
+  get_double("calculated_median",        "CalculatedMedian");
 
   ss << "}";
 

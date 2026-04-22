@@ -32,6 +32,10 @@ sed "s/\[eno1\]/[$CAMERA_IFACE]/" "$REPO_DIR/config/ptp/ptp4l.conf" | sudo tee /
 
 # udev rules
 sudo cp "$REPO_DIR/config/udev/99-dfg-camera.rules" /etc/udev/rules.d/99-dfg-camera.rules
+sudo cp "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" /usr/local/bin/identify_and_install_udev.sh
+sudo chmod +x /usr/local/bin/identify_and_install_udev.sh
+sudo cp "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" /usr/local/bin/identify_and_install_udev.sh
+sudo chmod +x /usr/local/bin/identify_and_install_udev.sh
 sudo cp "$REPO_DIR/config/udev/99-gps.rules" /etc/udev/rules.d/99-gps.rules
 sudo udevadm control --reload-rules
 sudo udevadm trigger
