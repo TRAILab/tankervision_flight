@@ -1,12 +1,14 @@
 [Unit]
 Description=TankerVision ROS2 Flight Launch
-After=network.target ptp4l.service chrony.service
-Requires=ptp4l.service
+After=network.target ptp4l.service chrony.service mnt-storage.mount
+Requires=ptp4l.service mnt-storage.mount
+
 
 [Service]
 Type=simple
 User=FLIGHT_USER
 Environment="HOME=/home/FLIGHT_USER"
+ExecStartPre=/usr/local/bin/configure-dfg-camera.sh /home/FLIGHT_USER/tankervision_flight/config/tankervision.yaml
 ExecStart=/bin/bash -c 'source /opt/ros/humble/setup.bash && source /home/FLIGHT_USER/tankervision_flight/install/setup.bash && ros2 launch tanker_vision flight.launch.py'
 Restart=on-failure
 RestartSec=10

@@ -38,6 +38,7 @@ def _launch_lucid_camera(_):
     return [node]
 
 
+
 def _launch_analog_camera(context):
     standard = LaunchConfiguration('video_standard').perform(context).upper()
     device   = LaunchConfiguration('video_device').perform(context)

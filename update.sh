@@ -1,0 +1,142 @@
+#!/bin/bash
+# update.sh — Deploy config and code changes to this flight unit.
+#
+# Run after every `git pull` to propagate repo changes to the system.
+# Safe to run repeatedly. Does NOT install packages or modify nmcli profiles.
+# For first-time machine setup, run install.sh instead.
+#
+# Usage: sudo ./update.sh
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Disable exit-on-error for the service restart section only
+# (individual restarts handle their own errors)
+
+# ── Colour helpers ────────────────────────────────────────────────
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
+info()  { echo -e "${GREEN}[update]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[update]${NC} $*"; }
+error() { echo -e "${RED}[update]${NC} $*"; exit 1; }
+
+# ── Root check ────────────────────────────────────────────────────
+[[ $EUID -ne 0 ]] && error "Run as root: sudo ./update.sh"
+
+# ── Detect camera interface (same logic as install.sh) ────────────
+CAMERA_IFACE=$(ip link show | grep -oP '(?<=\d: )(en[^x]\S+)(?=:)' | head -1)
+[[ -z "$CAMERA_IFACE" ]] && error "Could not detect PCI ethernet interface."
+info "Camera interface: $CAMERA_IFACE"
+
+# ── 1. Deploy configs ─────────────────────────────────────────────
+info "Deploying configs..."
+
+# chrony
+cp "$REPO_DIR/config/chrony/chrony.conf" /etc/chrony/chrony.conf
+info "  chrony.conf"
+
+# gpsd
+mkdir -p /etc/systemd/system/gpsd.service.d/
+cp "$REPO_DIR/config/gpsd/gpsd-service-override.conf" /etc/systemd/system/gpsd.service.d/override.conf
+cp "$REPO_DIR/config/gpsd/gpsd-defaults" /etc/default/gpsd
+info "  gpsd config"
+
+# ptp4l — re-substitute interface name each time
+mkdir -p /etc/linuxptp
+sed "s/\[eno1\]/[$CAMERA_IFACE]/" "$REPO_DIR/config/ptp/ptp4l.conf" \
+    | tee /etc/linuxptp/ptp4l.conf > /dev/null
+info "  ptp4l.conf (iface: $CAMERA_IFACE)"
+
+# udev rules
+cp "$REPO_DIR/config/udev/99-dfg-camera.rules" /etc/udev/rules.d/99-dfg-camera.rules
+cp "$REPO_DIR/config/udev/99-gps.rules"        /etc/udev/rules.d/99-gps.rules
+udevadm control --reload-rules
+udevadm trigger
+info "  udev rules"
+
+# scripts
+cp "$REPO_DIR/scripts/configure-dfg-camera.sh" /usr/local/bin/configure-dfg-camera.sh
+chmod +x /usr/local/bin/configure-dfg-camera.sh
+cp "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" /usr/local/bin/identify_and_install_udev.sh
+chmod +x /usr/local/bin/identify_and_install_udev.sh
+info "  helper scripts"
+
+# ── 2. Deploy systemd services ────────────────────────────────────
+info "Deploying systemd services..."
+
+# ptp4l — substitute interface name
+sed "s/eno1/$CAMERA_IFACE/g" "$REPO_DIR/startup_scripts/ptp4l.service" \
+    | tee /etc/systemd/system/ptp4l.service > /dev/null
+info "  ptp4l.service"
+
+# tankervision — always write fresh from template then substitute user
+# (avoids the silent no-op on re-run if FLIGHT_USER was already replaced)
+CURRENT_USER=$(logname 2>/dev/null || echo "${SUDO_USER:-trail}")
+cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/tankervision.service
+sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/tankervision.service
+info "  tankervision.service (user: $CURRENT_USER)"
+
+# remaining services — copy as-is
+for SVC in \
+    tanker_vision.service \
+    tanker_vision_status.service \
+    gpsd-chrony.service \
+    socat-pty.service \
+    setup_eno1.service \
+    upload.service
+do
+    if [[ -f "$REPO_DIR/startup_scripts/$SVC" ]]; then
+        cp "$REPO_DIR/startup_scripts/$SVC" /etc/systemd/system/
+        info "  $SVC"
+    fi
+done
+
+# ── 3. Reload systemd ─────────────────────────────────────────────
+info "Reloading systemd..."
+systemctl daemon-reload
+
+# ── 4. Restart running services ───────────────────────────────────
+info "Restarting affected services..."
+
+restart_svc() {
+    local SVC="$1"
+    if systemctl is-enabled --quiet "$SVC" 2>/dev/null; then
+        if systemctl stop "$SVC" 2>/dev/null; then true; fi
+        if systemctl start "$SVC" 2>/dev/null; then
+            info "  started $SVC"
+        else
+            warn "  $SVC failed to start — check: journalctl -u $SVC"
+        fi
+    else
+        warn "  $SVC not enabled — skipping (enable with install.sh if needed)"
+    fi
+}
+
+restart_svc chrony
+restart_svc gpsd.service        # stop/start avoids masked gpsd.socket issue
+restart_svc ptp4l.service
+restart_svc gpsd-chrony.service
+restart_svc tankervision.service
+restart_svc tanker_vision_status.service
+
+# ── 5. Rebuild ROS2 workspace ─────────────────────────────────────
+info "Building ROS2 workspace..."
+# Temporarily disable -u: ROS setup.bash references unset variables internally
+set +u
+source /opt/ros/humble/setup.bash
+set -u
+cd "$REPO_DIR"
+colcon build --symlink-install --packages-skip xsens_mti_ros2_driver
+
+# ── 6. Summary ────────────────────────────────────────────────────
+echo ""
+info "Done. Active service status:"
+for SVC in ptp4l.service tankervision.service tanker_vision_status.service; do
+    STATUS=$(systemctl is-active "$SVC" 2>/dev/null || echo "inactive")
+    if [[ "$STATUS" == "active" ]]; then
+        echo -e "  ${GREEN}●${NC} $SVC"
+    else
+        echo -e "  ${YELLOW}○${NC} $SVC ($STATUS)"
+    fi
+done
+echo ""

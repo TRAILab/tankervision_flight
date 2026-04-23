@@ -1,0 +1,49 @@
+# tankervision.yaml — Global configuration for TankerVision flight computer.
+#
+# This is the single source of truth for all system parameters.
+# Read by: flight.launch.py, configure-dfg-camera.sh, arena_camera_node,
+#          status_node.py, and the recording node.
+#
+# Change 'mode' before each flight.
+
+# System mode
+# testing : storage dir created at init, no recording node, PTP checked but not blocking
+# flight  : storage dir on first trigger, recording node launched, PTP required
+mode: testing
+
+# Storage
+storage:
+  root: /mnt/storage
+  saved_frames_dir: /mnt/storage/saved_frames
+
+# Save trigger
+trigger:
+  topic: /save_images_trigger
+  timeout_sec: 20
+  cooldown_sec: 5
+
+# Lucid Triton2
+lucid_camera:
+  topic: /cam0/image_raw
+  width: 5320
+  height: 4600
+  exposure_time: 3000.0
+  pixelformat: bayer_rggb16
+  qos_reliability: reliable
+
+# Analog camera (DFG2USB Pro)
+analog_camera:
+  topic: /cam1/image_raw
+  device: /dev/video0
+  standard: NTSC
+  ntsc:
+    image_size: [720, 480]
+    time_per_frame: [1001, 30000]
+  pal:
+    image_size: [720, 576]
+    time_per_frame: [1, 25]
+
+# PTP / clock
+ptp:
+  interface: auto
+  require_sync_before_launch: true
