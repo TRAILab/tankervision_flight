@@ -30,6 +30,13 @@ if [[ $EUID -ne 0 ]]; then
   error "This script must be run as root: sudo bash $0"
 fi
 
+# ── Stop tankervision so it doesn't hold ports ───────────────────
+if systemctl is-active --quiet tankervision; then
+  info "Stopping tankervision to free serial ports..."
+  systemctl stop tankervision
+  sleep 2
+fi
+
 # ── Remove old conflicting rules ─────────────────────────────────
 for old in /etc/udev/rules.d/99-im19.rules /etc/udev/rules.d/99-gps.rules; do
   if [[ -f "$old" ]]; then
@@ -39,13 +46,47 @@ for old in /etc/udev/rules.d/99-im19.rules /etc/udev/rules.d/99-gps.rules; do
 done
 
 # ── Find all ttyUSB ports ────────────────────────────────────────
-mapfile -t PORTS < <(ls /dev/ttyUSB* 2>/dev/null)
+mapfile -t ALL_PORTS < <(ls /dev/ttyUSB* 2>/dev/null)
 
-if [[ ${#PORTS[@]} -eq 0 ]]; then
+if [[ ${#ALL_PORTS[@]} -eq 0 ]]; then
   error "No ttyUSB devices found. Are the cables plugged in?"
 fi
 
-info "Found ${#PORTS[@]} ttyUSB ports: ${PORTS[*]}"
+# ── Filter out Quectel modem ports (ID_PATH contains 2.4:) ───────
+PORTS=()
+for port in "${ALL_PORTS[@]}"; do
+  id_path=$(udevadm info -q property -n "$port" 2>/dev/null | grep '^ID_PATH=' | cut -d= -f2)
+  if [[ "$id_path" == *"2.4:"* ]]; then
+    info "  Skipping $port ($id_path) — Quectel LTE modem"
+  else
+    PORTS+=("$port")
+  fi
+done
+
+if [[ ${#PORTS[@]} -eq 0 ]]; then
+  error "No non-modem ttyUSB devices found. Are the sensor cables plugged in?"
+fi
+
+info "Found ${#PORTS[@]} sensor ports: ${PORTS[*]}"
+
+# ── Wake IM19 on all candidate ports before probing ──────────────
+info "Waking IM19 on all candidate ports..."
+python3 - <<PY
+import serial, time
+ports = [$(printf '"%s",' "${PORTS[@]}" | sed 's/,$//')]
+for port in ports:
+    try:
+        ser = serial.Serial(port, 115200, timeout=0.3)
+        time.sleep(0.2)
+        ser.write(b'AT+MEMS_OUTPUT=UART1,ON\r\n')
+        ser.flush()
+        time.sleep(0.5)
+        ser.close()
+    except:
+        pass
+print("Wake commands sent.")
+PY
+sleep 2
 
 # ── Probe each port ──────────────────────────────────────────────
 # Uses Python to read a burst of data and identify the stream type.
@@ -125,14 +166,14 @@ PY
   esac
 done
 
-# ── Assign silent port as NAVI if not yet found ──────────────────
+# ── Assign silent FTDI port as NAVI if not yet found ─────────────
 # NAVI port (UART3) is often silent until GNSS fusion is working.
-# If we found MEMS and GNSS but not NAVI, assign the remaining port.
+# Only assign from filtered (non-modem) ports.
 if [[ -z "$PORT_NAVI" && -n "$PORT_MEMS" && -n "$PORT_GNSS" ]]; then
   for port in "${PORTS[@]}"; do
     if [[ "$port" != "$PORT_MEMS" && "$port" != "$PORT_GNSS" ]]; then
       PORT_NAVI="$port"
-      warn "NAVI port not actively streaming — assigning remaining port: $PORT_NAVI"
+      warn "NAVI port not actively streaming — assigning remaining FTDI port: $PORT_NAVI"
       break
     fi
   done
@@ -194,7 +235,7 @@ info "Written: $RULES_FILE"
 # ── Reload and apply ─────────────────────────────────────────────
 udevadm control --reload-rules
 
-for port in "${PORTS[@]}"; do
+for port in "${ALL_PORTS[@]}"; do
   udevadm trigger --action=add "$port"
 done
 
