@@ -4,7 +4,7 @@ im19_mems_node:
     baud: 115200
     timeout: 0.05
     frame_id: im19
-    output_dir: /tmp/im19_logs
+    output_dir: /mnt/storage
     chunk_size: 1024
 
     stats_period_sec: 300.0

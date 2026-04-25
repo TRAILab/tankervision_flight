@@ -11,172 +11,181 @@ from rclpy.node import Node
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Float64MultiArray
 
-PACKET_LEN = 52
-HEADER = b"fmim"
-TAIL = b"ed"
+MEMS_HEADER  = b"fmim"
+NAVI_HEADER  = b"fmin"
+COMMON_PREFIX = b"fmi"
+MEMS_LEN = 52
+NAVI_LEN = 100
+TAIL     = b"ed"
 FMT_MEMS = "<4sd9fH2s"
 G_TO_MPS2 = 9.80665
 
 
-def checksum_1_to_48(packet: bytes) -> int:
-    return sum(packet[:48]) & 0xFFFF
-
-
 def parse_mems_packet(packet: bytes):
-    if len(packet) != PACKET_LEN:
+    if len(packet) != MEMS_LEN:
         return None
-
     try:
         values = struct.unpack(FMT_MEMS, packet)
     except struct.error:
         return None
-
-    (
-        header,
-        utc_raw,
-        acc_x_g,
-        acc_y_g,
-        acc_z_g,
-        gyro_x_rps,
-        gyro_y_rps,
-        gyro_z_rps,
-        reserved1,
-        reserved2,
-        reserved3,
-        checksum_recv,
-        tail,
-    ) = values
-
-    if header != HEADER:
+    (header, utc_raw, acc_x_g, acc_y_g, acc_z_g,
+     gyro_x_rps, gyro_y_rps, gyro_z_rps,
+     _, _, _, checksum_recv, tail) = values
+    if header != MEMS_HEADER or tail != TAIL:
         return None
-    if tail != TAIL:
+    if (sum(packet[:48]) & 0xFFFF) != checksum_recv:
         return None
-
-    checksum_calc = checksum_1_to_48(packet)
-    if checksum_calc != checksum_recv:
-        return None
-
     return {
-        "utc_raw": utc_raw,
-        "acc_x_g": acc_x_g,
-        "acc_y_g": acc_y_g,
-        "acc_z_g": acc_z_g,
+        "utc_raw":    utc_raw,
+        "acc_x_g":    acc_x_g,   "acc_y_g":    acc_y_g,   "acc_z_g":    acc_z_g,
         "acc_x_mps2": acc_x_g * G_TO_MPS2,
         "acc_y_mps2": acc_y_g * G_TO_MPS2,
         "acc_z_mps2": acc_z_g * G_TO_MPS2,
-        "gyro_x_rps": gyro_x_rps,
-        "gyro_y_rps": gyro_y_rps,
-        "gyro_z_rps": gyro_z_rps,
-        "reserved1": reserved1,
-        "reserved2": reserved2,
-        "reserved3": reserved3,
-        "checksum_recv": checksum_recv,
-        "checksum_calc": checksum_calc,
+        "gyro_x_rps": gyro_x_rps, "gyro_y_rps": gyro_y_rps, "gyro_z_rps": gyro_z_rps,
     }
 
 
-class MemsPacketExtractor:
+class CombinedExtractor:
     def __init__(self):
-        self.buf = bytearray()
-        self.tail_fail = 0
+        self.buf           = bytearray()
+        self.tail_fail     = 0
         self.checksum_fail = 0
-        self.header_skip = 0
+        self.header_skip   = 0
 
     def feed(self, chunk: bytes):
         self.buf.extend(chunk)
 
     def get_one(self):
         while True:
-            idx = self.buf.find(HEADER)
+            idx = self.buf.find(COMMON_PREFIX)
             if idx < 0:
-                if len(self.buf) > 3:
-                    self.header_skip += max(0, len(self.buf) - 3)
-                    del self.buf[:-3]
+                if len(self.buf) > 2:
+                    self.header_skip += max(0, len(self.buf) - 2)
+                    del self.buf[:-2]
                 return None
 
             if idx > 0:
                 self.header_skip += idx
                 del self.buf[:idx]
 
-            if len(self.buf) < PACKET_LEN:
+            if len(self.buf) < 4:
                 return None
 
-            candidate = bytes(self.buf[:PACKET_LEN])
+            fourth = self.buf[3]
+            if fourth == ord('m'):
+                pkt_type, pkt_len, cs_end = 'mems', MEMS_LEN, 48
+            elif fourth == ord('n'):
+                pkt_type, pkt_len, cs_end = 'navi', NAVI_LEN, 96
+            else:
+                self.header_skip += 1
+                del self.buf[0]
+                continue
+
+            if len(self.buf) < pkt_len:
+                return None
+
+            candidate = bytes(self.buf[:pkt_len])
 
             if candidate[-2:] != TAIL:
                 self.tail_fail += 1
                 del self.buf[0]
                 continue
 
-            parsed = parse_mems_packet(candidate)
-            if parsed is None:
+            calc = sum(candidate[:cs_end]) & 0xFFFF
+            recv = struct.unpack_from('<H', candidate, cs_end)[0]
+            if calc != recv:
                 self.checksum_fail += 1
                 del self.buf[0]
                 continue
 
-            del self.buf[:PACKET_LEN]
-            return candidate
+            del self.buf[:pkt_len]
+            return candidate, pkt_type
 
 
 class IM19MemsNode(Node):
     def __init__(self):
         super().__init__("im19_mems_node")
 
-        self.declare_parameter("port", "/dev/ttyUSB2")
-        self.declare_parameter("baud", 115200)
-        self.declare_parameter("timeout", 0.05)
+        self.declare_parameter("port",     "/dev/im19_mems")
+        self.declare_parameter("baud",     115200)
+        self.declare_parameter("timeout",  0.05)
         self.declare_parameter("frame_id", "im19")
         self.declare_parameter("output_dir", str(Path.home() / "im19_logs"))
         self.declare_parameter("chunk_size", 1024)
-
-        self.declare_parameter("stats_period_sec", 300.0)
-        self.declare_parameter("flush_period_sec", 5.0)
-        self.declare_parameter("reconnect_period_sec", 1.0)
-
+        self.declare_parameter("stats_period_sec",    300.0)
+        self.declare_parameter("flush_period_sec",      5.0)
+        self.declare_parameter("reconnect_period_sec",  1.0)
         self.declare_parameter("send_startup_commands", True)
         self.declare_parameter("startup_commands", ["AT+MEMS_OUTPUT=UART1,ON"])
 
-        self.port = self.get_parameter("port").value
-        self.baud = int(self.get_parameter("baud").value)
-        self.timeout = float(self.get_parameter("timeout").value)
-        self.frame_id = self.get_parameter("frame_id").value
-        self.output_dir = self.get_parameter("output_dir").value
+        self.port      = self.get_parameter("port").value
+        self.baud      = int(self.get_parameter("baud").value)
+        self.timeout   = float(self.get_parameter("timeout").value)
+        self.frame_id  = self.get_parameter("frame_id").value
         self.chunk_size = int(self.get_parameter("chunk_size").value)
-
-        self.stats_period_sec = float(self.get_parameter("stats_period_sec").value)
-        self.flush_period_sec = float(self.get_parameter("flush_period_sec").value)
+        self.stats_period_sec    = float(self.get_parameter("stats_period_sec").value)
+        self.flush_period_sec    = float(self.get_parameter("flush_period_sec").value)
         self.reconnect_period_sec = float(self.get_parameter("reconnect_period_sec").value)
-
         self.send_startup_commands = bool(self.get_parameter("send_startup_commands").value)
         self.startup_commands = list(self.get_parameter("startup_commands").value)
 
-        os.makedirs(self.output_dir, exist_ok=True)
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        self.bin_path = os.path.join(self.output_dir, f"im19_mems_raw_{ts}.bin")
-        self.bin_file = open(self.bin_path, "ab")
+        self._output_dir_base = self.get_parameter("output_dir").value
+        self.output_dir  = self._output_dir_base
+        self.mems_file   = None
+        self.navi_file   = None
 
         self.ser = None
         self.connected = False
         self.last_reconnect_try = 0.0
 
-        self.extractor = MemsPacketExtractor()
-        self.good_packets = 0
+        self.extractor   = CombinedExtractor()
+        self.good_mems   = 0
+        self.good_navi   = 0
 
-        self.imu_pub = self.create_publisher(Imu, "/im19/imu", 50)
+        self.imu_pub = self.create_publisher(Imu,              "/im19/imu",     50)
         self.raw_pub = self.create_publisher(Float64MultiArray, "/im19/rawdata", 50)
 
-        self.timer = self.create_timer(0.001, self.read_serial_once)
-        self.stat_timer = self.create_timer(self.stats_period_sec, self.print_stats)
-        self.flush_timer = self.create_timer(self.flush_period_sec, self.flush_file)
+        self.create_timer(0.001,                   self.read_serial_once)
+        self.create_timer(self.stats_period_sec,   self.print_stats)
+        self.create_timer(self.flush_period_sec,   self.flush_files)
 
         self.try_open_serial(initial=True)
 
+    def _make_session_dir(self):
+        now = time.localtime()
+        self.output_dir = os.path.join(
+            self._output_dir_base,
+            time.strftime("%Y-%m-%d", now),
+            time.strftime("imu_%H-%M-%S", now),
+        )
+        os.makedirs(self.output_dir, exist_ok=True)
+
+    def _ensure_mems_file(self):
+        if self.mems_file is not None:
+            return
+        if self.output_dir == self._output_dir_base:
+            self._make_session_dir()
+        path = os.path.join(self.output_dir, f"im19_mems_raw_{time.strftime('%Y%m%d_%H%M%S')}.bin")
+        self.mems_file = open(path, "ab")
+        self.get_logger().info(f"MEMS output: {path}")
+
+    def _ensure_navi_file(self):
+        if self.navi_file is not None:
+            return
+        if self.output_dir == self._output_dir_base:
+            self._make_session_dir()
+        path = os.path.join(self.output_dir, f"im19_navi_raw_{time.strftime('%Y%m%d_%H%M%S')}.bin")
+        self.navi_file = open(path, "ab")
+        self.get_logger().info(f"NAVI output: {path}")
+
     def destroy_node(self):
-        try:
-            self.bin_file.flush()
-            self.bin_file.close()
-        except Exception:
-            pass
+        for f in (self.mems_file, self.navi_file):
+            try:
+                if f is not None:
+                    f.flush()
+                    f.close()
+            except Exception:
+                pass
         self.close_serial()
         super().destroy_node()
 
@@ -193,21 +202,13 @@ class IM19MemsNode(Node):
         now = time.time()
         if (not initial) and (now - self.last_reconnect_try < self.reconnect_period_sec):
             return
-
         self.last_reconnect_try = now
-
         try:
-            self.ser = serial.Serial(
-                port=self.port,
-                baudrate=self.baud,
-                timeout=self.timeout,
-            )
+            self.ser = serial.Serial(port=self.port, baudrate=self.baud, timeout=self.timeout)
             self.connected = True
             self.get_logger().info(f"Opened serial {self.port} @ {self.baud}")
-
             if self.send_startup_commands:
                 self.send_commands(self.startup_commands)
-
         except Exception as e:
             self.connected = False
             self.ser = None
@@ -216,25 +217,23 @@ class IM19MemsNode(Node):
     def send_commands(self, commands):
         if self.ser is None:
             return
-
         for cmd in commands:
             try:
                 self.ser.reset_input_buffer()
                 self.ser.write((cmd + "\r\n").encode())
                 self.ser.flush()
                 time.sleep(0.2)
-
                 response = self.ser.read(1024)
                 if response:
                     preview = response.decode(errors="replace").strip()
                     if preview:
-                        self.get_logger().info(f"Startup command [{cmd}] response: {preview[:200]}")
+                        self.get_logger().info(f"Startup [{cmd}]: {preview[:200]}")
                     else:
-                        self.get_logger().info(f"Startup command sent: {cmd}")
+                        self.get_logger().info(f"Startup sent: {cmd}")
                 else:
-                    self.get_logger().info(f"Startup command sent: {cmd}")
+                    self.get_logger().info(f"Startup sent: {cmd}")
             except Exception as e:
-                self.get_logger().error(f"Failed to send startup command [{cmd}]: {e}")
+                self.get_logger().error(f"Failed to send startup [{cmd}]: {e}")
                 self.close_serial()
                 return
 
@@ -242,82 +241,82 @@ class IM19MemsNode(Node):
         msg = Float64MultiArray()
         msg.data = [
             float(data["utc_raw"]),
-            float(data["acc_x_g"]),
-            float(data["acc_y_g"]),
-            float(data["acc_z_g"]),
-            float(data["gyro_x_rps"]),
-            float(data["gyro_y_rps"]),
-            float(data["gyro_z_rps"]),
+            float(data["acc_x_g"]),   float(data["acc_y_g"]),   float(data["acc_z_g"]),
+            float(data["gyro_x_rps"]), float(data["gyro_y_rps"]), float(data["gyro_z_rps"]),
         ]
         self.raw_pub.publish(msg)
 
     def publish_imu(self, data: dict):
         msg = Imu()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.stamp    = self.get_clock().now().to_msg()
         msg.header.frame_id = self.frame_id
-
-        msg.orientation_covariance[0] = -1.0
-
+        msg.orientation_covariance[0]         = -1.0
+        msg.angular_velocity_covariance[0]    = -1.0
+        msg.linear_acceleration_covariance[0] = -1.0
         msg.angular_velocity.x = float(data["gyro_x_rps"])
         msg.angular_velocity.y = float(data["gyro_y_rps"])
         msg.angular_velocity.z = float(data["gyro_z_rps"])
-
         msg.linear_acceleration.x = float(data["acc_x_mps2"])
         msg.linear_acceleration.y = float(data["acc_y_mps2"])
         msg.linear_acceleration.z = float(data["acc_z_mps2"])
-
-        msg.angular_velocity_covariance[0] = -1.0
-        msg.linear_acceleration_covariance[0] = -1.0
-
         self.imu_pub.publish(msg)
 
-    def flush_file(self):
-        try:
-            self.bin_file.flush()
-        except Exception as e:
-            self.get_logger().error(f"Failed to flush bin file: {e}")
+    def flush_files(self):
+        for f in (self.mems_file, self.navi_file):
+            if f is None:
+                continue
+            try:
+                f.flush()
+            except Exception as e:
+                self.get_logger().error(f"Flush error: {e}")
 
     def read_serial_once(self):
         if not self.connected or self.ser is None:
             self.try_open_serial()
             return
-
         try:
             chunk = self.ser.read(self.chunk_size)
         except Exception as e:
             self.get_logger().error(f"Serial read failed: {e}")
             self.close_serial()
             return
-
         if not chunk:
             return
-
-        try:
-            self.bin_file.write(chunk)
-        except Exception as e:
-            self.get_logger().error(f"Failed to write bin file: {e}")
 
         self.extractor.feed(chunk)
 
         while True:
-            pkt = self.extractor.get_one()
-            if pkt is None:
+            result = self.extractor.get_one()
+            if result is None:
                 break
+            pkt, pkt_type = result
 
-            data = parse_mems_packet(pkt)
-            if data is None:
-                continue
+            if pkt_type == 'mems':
+                self._ensure_mems_file()
+                try:
+                    self.mems_file.write(pkt)
+                except Exception as e:
+                    self.get_logger().error(f"MEMS write error: {e}")
+                data = parse_mems_packet(pkt)
+                if data:
+                    self.good_mems += 1
+                    self.publish_rawdata(data)
+                    self.publish_imu(data)
 
-            self.good_packets += 1
-            self.publish_rawdata(data)
-            self.publish_imu(data)
+            elif pkt_type == 'navi':
+                self._ensure_navi_file()
+                try:
+                    self.navi_file.write(pkt)
+                except Exception as e:
+                    self.get_logger().error(f"NAVI write error: {e}")
+                self.good_navi += 1
 
     def print_stats(self):
         self.get_logger().info(
-            f"good_packets={self.good_packets}, "
-            f"tail_fail={self.extractor.tail_fail}, "
-            f"checksum_fail={self.extractor.checksum_fail}, "
-            f"header_skip={self.extractor.header_skip}, "
+            f"mems={self.good_mems} navi={self.good_navi} "
+            f"tail_fail={self.extractor.tail_fail} "
+            f"checksum_fail={self.extractor.checksum_fail} "
+            f"header_skip={self.extractor.header_skip} "
             f"connected={self.connected}"
         )
 
