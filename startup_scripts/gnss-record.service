@@ -1,0 +1,13 @@
+[Unit]
+Description=GNSS Raw Data Recorder
+After=mnt-storage.mount
+Requires=mnt-storage.mount
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gnss_record.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

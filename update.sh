@@ -59,6 +59,8 @@ cp "$REPO_DIR/scripts/configure-dfg-camera.sh" /usr/local/bin/configure-dfg-came
 chmod +x /usr/local/bin/configure-dfg-camera.sh
 cp "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" /usr/local/bin/identify_and_install_udev.sh
 chmod +x /usr/local/bin/identify_and_install_udev.sh
+cp "$REPO_DIR/startup_scripts/gnss_record.sh" /usr/local/bin/gnss_record.sh
+chmod +x /usr/local/bin/gnss_record.sh
 info "  helper scripts"
 
 # ── 2. Deploy systemd services ────────────────────────────────────
@@ -131,7 +133,7 @@ colcon build --symlink-install --packages-skip xsens_mti_ros2_driver
 # ── 6. Summary ────────────────────────────────────────────────────
 echo ""
 info "Done. Active service status:"
-for SVC in ptp4l.service tankervision.service tanker_vision_status.service; do
+for SVC in ptp4l.service tankervision.service tanker_vision_status.service gnss-record.service; do
     STATUS=$(systemctl is-active "$SVC" 2>/dev/null || echo "inactive")
     if [[ "$STATUS" == "active" ]]; then
         echo -e "  ${GREEN}●${NC} $SVC"
