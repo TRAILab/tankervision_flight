@@ -1,370 +1,283 @@
-import io
-import sys
+#!/usr/bin/env python3
+"""
+status_node.py — TankerVision flight status monitor.
+
+Responsibilities:
+  - On startup: send email notification (retry every 5 min until success)
+  - Write flight log to /mnt/storage/flight_log_<timestamp>.txt
+  - Subscribe to /rosout — log WARN/ERROR from all nodes
+  - Monitor /cam1/image_raw rate — detect MaxVis on/off
+  - Subscribe to /save_images_trigger — log each trigger + MaxVis state
+  - On shutdown: write session summary to log
+"""
+
 import os
-import math
-import socket
-import shutil
-import serial
 import subprocess
 import threading
-import logging
-
-from concurrent.futures import ThreadPoolExecutor
+import time
+import yaml
 from datetime import datetime
-from std_msgs.msg import String
-from geometry_msgs.msg import Vector3Stamped
+from collections import deque
+
 import rclpy
 from rclpy.node import Node
-from .send_email import send_email, EmailError  # adjust import as needed
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rcl_interfaces.msg import Log
+from sensor_msgs.msg import Image
+from std_msgs.msg import Empty
 
-# ─── Logging setup ─────────────────────────────────────────────────────────────
-_log_stream = io.StringIO()
-_stream_handler = logging.StreamHandler(_log_stream)
-_stream_handler.setLevel(logging.INFO)
-_formatter = logging.Formatter(
-    '[%(asctime)s] %(levelname)s %(name)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+
+# ── QoS ──────────────────────────────────────────────────────────────────────
+_BEST_EFFORT_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=10,
 )
-_stream_handler.setFormatter(_formatter)
+_ROSOUT_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=100,
+)
 
-# ─── Configure the console handler ─────────────────────────────
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(_formatter)
 
-# ─── Grab your logger and attach only the console & in-memory handlers ──────
-_py_logger = logging.getLogger('status_node')
-_py_logger.setLevel(logging.CRITICAL)
-_py_logger.handlers.clear()
-_py_logger.addHandler(console_handler)
-_py_logger.addHandler(_stream_handler)
-_py_logger.propagate = False
+# ── YAML loader ───────────────────────────────────────────────────────────────
+def _load_yaml(path: str) -> dict:
+    with open(path) as f:
+        return yaml.safe_load(f)
 
-def chrony_has_pps():
+
+# ── msmtp email ───────────────────────────────────────────────────────────────
+def send_email_msmtp(to: str, subject: str, body: str, msmtprc: str = None) -> bool:
+    """
+    Send email via msmtp. Returns True on success, False on failure.
+    """
     try:
+        cmd = ['msmtp']
+        if msmtprc and os.path.exists(msmtprc):
+            cmd += ['-C', msmtprc]
+        cmd.append(to)
+        msg = f"To: {to}\nSubject: {subject}\n\n{body}"
         result = subprocess.run(
-            ["chronyc", "sources"],
+            cmd,
+            input=msg,
             capture_output=True,
             text=True,
-            check=True
+            timeout=15,
         )
-    except subprocess.CalledProcessError:
+        return result.returncode == 0
+    except Exception:
         return False
 
-    if "506" in result.stdout:
-        return False
 
-    parsing = False
-    for line in result.stdout.splitlines():
-        if line.strip().startswith("===="):
-            parsing = True
-            continue
-        if not parsing:
-            continue
-        if "PPS" in line:
-            cols = line.split(None, 8)
-            if len(cols) >= 5:
-                try:
-                    reach = int(cols[4], 8)
-                    return (reach & 0x01) != 0
-                except ValueError:
-                    pass
-    return False
-
-def has_internet():
-    try:
-        socket.create_connection(("www.google.com", 80), timeout=1.0)
-        return True
-    except OSError:
-        return False
-
-def get_free_space_percentage(path="/"):
-    usage = shutil.disk_usage(path)
-    if usage.total == 0:
-        return "00"
-    percent = int((usage.free / usage.total) * 100)
-    return f"{min(percent, 99):02d}"
-
-def is_disk_mounted(mount_point="/mnt/wildfire"):
-    return os.path.ismount(mount_point)
-
-class StateHandler:
-    def __init__(self, name, ok_state, no_heartbeat_state):
-        self.name = name
-        self.state = None
-        self.last_heartbeat = None
-        self.ok_state = ok_state
-        self.no_heartbeat_state = no_heartbeat_state
-
-    def update_heartbeat(self, now, new_state=None):
-        self.last_heartbeat = now
-        self._set_state(new_state or self.ok_state)
-
-    def check_heartbeat_timeout(self, now, timeout_sec):
-        if (self.last_heartbeat is None or
-            (now - self.last_heartbeat).nanoseconds / 1e9 > timeout_sec):
-            self._set_state(self.no_heartbeat_state)
-
-    def _set_state(self, new_state):
-        if self.state != new_state:
-            self.state = new_state
-            _py_logger.critical(f"{self.name} state changed: {new_state}")
-
+# ── Status node ───────────────────────────────────────────────────────────────
 class StatusNode(Node):
+
+    MAXVIS_TIMEOUT_SEC = 3.0     # seconds of silence before MaxVis considered off
+    EMAIL_RETRY_SEC    = 300.0   # retry email every 5 minutes
+
     def __init__(self):
         super().__init__('status_node')
 
-        # Thread pool for all blocking tasks
-        self._executor = ThreadPoolExecutor(max_workers=4)
+        # ── Load config ───────────────────────────────────────────
+        yaml_path = self.declare_parameter(
+            'config', '/home/flight/tankervision_flight/config/tankervision.yaml'
+        ).value
+        try:
+            cfg = _load_yaml(yaml_path)
+        except Exception as e:
+            self.get_logger().error(f'Failed to load config: {e}')
+            cfg = {}
 
-        self.is_in_air = False
-        self.send_landing_email = False
-        self.send_startup_email = True
-        self.camera_time_sync_state = None
-        self.internet_state = None
-        self.time_sync_state = None
-        self.velocity_msg_count = 0
+        unit_cfg  = cfg.get('unit', {})
+        notif_cfg = cfg.get('notifications', {})
+        stor_cfg  = cfg.get('storage', {})
 
-        # ─── State handlers ─────────────────────────────
-        self.gps       = StateHandler("GPS",    "GPS_OK",    "GPS_NO_HEARTBEAT")
-        self.imu       = StateHandler("IMU",    "IMU_OK",    "IMU_NO_HEARTBEAT")
-        self.camera    = StateHandler("CAMERA","CAMERA_RECEIVING", "CAMERA_NO_HEARTBEAT")
-        self.recording = StateHandler("RECORDING", "RECORDING_RECORDING", "RECORDING_NO_HEARTBEAT")
+        self._unit_name   = unit_cfg.get('name', 'unknown')
+        self._plane       = unit_cfg.get('plane_number', 'unknown')
+        self._province    = unit_cfg.get('province', 'unknown')
+        self._mode        = cfg.get('mode', 'testing')
+        self._email_to    = notif_cfg.get('email_to', '')
+        self._storage     = stor_cfg.get('root', '/mnt/storage')
+        self._msmtprc     = notif_cfg.get('msmtprc', '/home/argus/.msmtprc')
 
-        # ─── Subscriptions ────────────────────────────────
-        self.create_subscription(String, 'gps_heartbeat',       self.gps_heartbeat_callback,       10)
-        self.create_subscription(String, 'camera_heartbeat',    self.camera_heartbeat_callback,    10)
-        self.create_subscription(String, 'imu/heartbeat',       self.imu_heartbeat_callback,       10)
-        self.create_subscription(String, 'record_data/status',  self.recording_heartbeat_callback, 10)
+        # ── State ─────────────────────────────────────────────────
+        self._startup_time     = datetime.now()
+        self._email_sent       = False
+        self._maxvis_active    = False
+        self._last_maxvis_msg  = None   # rclpy time
+        self._trigger_count    = 0
+        self._error_count      = 0
+        self._maxvis_on_time   = 0.0    # accumulated seconds
+        self._maxvis_on_since  = None   # wall time when MaxVis last came on
+        self._lock             = threading.Lock()
+
+        # ── Open log file ─────────────────────────────────────────
+        ts = self._startup_time.strftime('%Y%m%d_%H%M%S')
+        log_path = os.path.join(self._storage, f'flight_log_{ts}.txt')
+        os.makedirs(self._storage, exist_ok=True)
+        self._log_file = open(log_path, 'w', buffering=1)  # line buffered
+        self._write_header()
+
+        # ── Subscriptions ─────────────────────────────────────────
         self.create_subscription(
-            Vector3Stamped, '/filter/velocity', self.velocity_callback, 10
-        )
+            Log, '/rosout', self._rosout_cb, _ROSOUT_QOS)
 
-        # ─── Timers ────────────────────────────────────────
-        self.create_timer(1.25, self.check_gps_heartbeat)
-        self.create_timer(1.25, self.check_camera_heartbeat)
-        self.create_timer(1.0,  self.check_imu_heartbeat)
-        self.create_timer(1.25, self.check_recording_heartbeat)
-        self.create_timer(5.0,  self.check_internet_connection)
-        self.create_timer(10.0, self.check_time_sync)
+        self.create_subscription(
+            Image, '/cam1/image_raw', self._maxvis_cb, _BEST_EFFORT_QOS)
 
-        # ─── Initial storage check ────────────────────────
-        if is_disk_mounted():
-            try:
-                _ = float(get_free_space_percentage("/mnt/wildfire"))
-            except Exception as e:
-                _py_logger.critical(f"Storage check error: {e}")
-        else:
-            _py_logger.critical("Storage check skipped: Disk not mounted.")
+        self.create_subscription(
+            Empty, '/save_images_trigger', self._trigger_cb, 10)
 
-    # ─── Heartbeat callbacks & checks ─────────────────────
-    def gps_heartbeat_callback(self, msg):
-        self.gps.update_heartbeat(self.get_clock().now())
+        # ── Timers ────────────────────────────────────────────────
+        # Check MaxVis timeout every second
+        self.create_timer(1.0, self._check_maxvis_timeout)
 
-    def camera_heartbeat_callback(self, msg):
-        now = self.get_clock().now()
-        data = msg.data.lower()
-        state = "CAMERA_RECEIVING"
-        if "timeout" in data:
-            state = "CAMERA_TIMEOUT"
-        elif "error" in data or "exception" in data:
-            state = "CAMERA_ERROR"
-        self.camera.update_heartbeat(now, state)
+        # Email retry every 5 minutes
+        self.create_timer(self.EMAIL_RETRY_SEC, self._retry_email)
 
-        sync_state = "CAMERA_TIME_SYNCED" if "slave" in data else "CAMERA_TIME_NOT_SYNCED"
-        if sync_state != self.camera_time_sync_state:
-            self.camera_time_sync_state = sync_state
-            _py_logger.critical(f"Camera Time Sync state changed: {sync_state}")
+        # Try startup email immediately in background
+        threading.Thread(target=self._try_send_startup_email, daemon=True).start()
 
-    def imu_heartbeat_callback(self, msg):
-        self.imu.update_heartbeat(self.get_clock().now())
+        self._log(f'STATUS   status_node online — mode: {self._mode}')
+        self.get_logger().info('StatusNode started')
 
-    def recording_heartbeat_callback(self, msg):
-        now = self.get_clock().now()
-        low = msg.data.lower()
-        if "recording" in low:
-            st = "RECORDING_RECORDING"
-        elif "scanning" in low:
-            st = "RECORDING_SCANNING"
-        else:
+    # ── Log helpers ───────────────────────────────────────────────────────────
+    def _ts(self) -> str:
+        return datetime.now().strftime('%H:%M:%S')
+
+    def _log(self, msg: str):
+        line = f'[{self._ts()}] {msg}\n'
+        with self._lock:
+            self._log_file.write(line)
+
+    def _write_header(self):
+        ts = self._startup_time.strftime('%Y-%m-%d %H:%M:%S %Z')
+        lines = [
+            '=' * 80,
+            'TANKERVISION FLIGHT LOG',
+            '=' * 80,
+            f'Unit:       {self._unit_name}',
+            f'Plane:      {self._plane}',
+            f'Province:   {self._province}',
+            f'Start time: {ts}',
+            f'Mode:       {self._mode}',
+            '=' * 80,
+            '',
+        ]
+        with self._lock:
+            self._log_file.write('\n'.join(lines) + '\n')
+
+    def _write_footer(self):
+        end_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S %Z')
+        duration = datetime.now() - self._startup_time
+        h, rem = divmod(int(duration.total_seconds()), 3600)
+        m, s   = divmod(rem, 60)
+
+        # Finalize MaxVis time
+        if self._maxvis_on_since is not None:
+            self._maxvis_on_time += time.time() - self._maxvis_on_since
+
+        mv_h, mv_rem = divmod(int(self._maxvis_on_time), 3600)
+        mv_m, mv_s   = divmod(mv_rem, 60)
+
+        lines = [
+            '',
+            '=' * 80,
+            f'Session end:    {end_time}',
+            f'Duration:       {h:02d}:{m:02d}:{s:02d}',
+            f'Triggers:       {self._trigger_count}',
+            f'MaxVis on time: {mv_h:02d}:{mv_m:02d}:{mv_s:02d}',
+            f'Errors logged:  {self._error_count}',
+            '=' * 80,
+        ]
+        with self._lock:
+            self._log_file.write('\n'.join(lines) + '\n')
+
+    # ── /rosout callback ──────────────────────────────────────────────────────
+    def _rosout_cb(self, msg: Log):
+        # Only log WARN (30) and above; skip our own node
+        if msg.level < 30 or msg.name == 'status_node':
             return
-        self.recording.update_heartbeat(now, st)
+        level = {30: 'WARN', 40: 'ERROR', 50: 'FATAL'}.get(msg.level, 'LOG')
+        self._log(f'{level:<8} [{msg.name}] {msg.msg}')
+        if msg.level >= 40:
+            self._error_count += 1
 
-    def check_gps_heartbeat(self):
-        self.gps.check_heartbeat_timeout(self.get_clock().now(), 2.0)
+    # ── /cam1/image_raw callback ───────────────────────────────────────────────
+    def _maxvis_cb(self, msg: Image):
+        self._last_maxvis_msg = self.get_clock().now()
+        if not self._maxvis_active:
+            self._maxvis_active = True
+            self._maxvis_on_since = time.time()
+            self._log('MAXVIS   Analog stream ON')
 
-    def check_camera_heartbeat(self):
-        self.camera.check_heartbeat_timeout(self.get_clock().now(), 3.0)
-
-    def check_imu_heartbeat(self):
-        self.imu.check_heartbeat_timeout(self.get_clock().now(), 2.0)
-
-    def check_recording_heartbeat(self):
-        self.recording.check_heartbeat_timeout(self.get_clock().now(), 2.0)
-
-    # ─── Internet & Time Sync Checks ─────────────────────
-    def check_internet_connection(self):
-        threading.Thread(target=self._check_internet_bg, daemon=True).start()
-
-    def _check_internet_bg(self):
-        connected = has_internet()
-        state = "INTERNET_OK" if connected else "INTERNET_NO_CONNECTION"
-        if state != self.internet_state:
-            self.internet_state = state
-            _py_logger.critical(f"Internet state changed: {state}")
-
-            if connected and self.send_landing_email:
-                self.send_landing_email = False
-                self._executor.submit(self._send_status_email,
-                                      'Landing Alert',
-                                      'The plane has landed. System status:')
-                self._executor.submit(self.send_sms,
-                                      'LANDING: The plane has landed. Another successful flight!')
-            elif connected and self.send_startup_email:
-                self.send_startup_email = False
-                self._executor.submit(send_email,
-                                      'Startup Alert',
-                                      'The plane has started up.')
-                self._executor.submit(self.send_sms,
-                                      'STARTUP: The plane has started up. Let\'s go!')
-
-    def check_time_sync(self):
-        threading.Thread(target=self._check_time_sync_bg, daemon=True).start()
-
-    def _check_time_sync_bg(self):
-        pps_ok = chrony_has_pps()
-        state = "TIME_SYNC_PPS" if pps_ok else "TIME_SYNC_NO_PPS"
-        if state != self.time_sync_state:
-            self.time_sync_state = state
-            _py_logger.critical(f"Time Sync state changed: {state}")
-
-    # ─── Recording Control & Velocity ─────────────────────
-    def control_cellular(self, enable: bool):
-        try:
-            ser = serial.Serial('/dev/ttyUSB3', 115200, timeout=1)
-            if enable:
-                ser.write(b'AT+CFUN=1\r\n')
-                self.send_landing_email = True
-            else:
-                ser.write(b'AT+CFUN=4\r\n')
-            ser.read(128)
-        except Exception as e:
-            _py_logger.critical(f"Failed to control cellular: {e}")
-        finally:
-            ser.close()
-
-    def send_sms(self, message: str,
-                 phone_number: str = "+19022099739",
-                 port: str = '/dev/ttyUSB3',
-                 baud: int = 115200):
-        try:
-            ser = serial.Serial(port, baud, timeout=0.5)
-            ser.write(b'AT+CMGF=1\r')
-            ser.readline()
-            ser.write(f'AT+CMGS="{phone_number}"\r'.encode())
-            if b'>' not in ser.read_until(b'>'):
-                _py_logger.critical("SMS failed: no prompt")
-                return
-            ser.write(message.encode() + b'\x1A')
-            if b'OK' not in ser.read_until(b'OK'):
-                _py_logger.critical("SMS failed: no OK")
-        except Exception as e:
-            _py_logger.critical(f"SMS failed: {e}")
-        finally:
-            try:
-                ser.close()
-            except:
-                pass
-
-    def _takeoff_procedure(self, mag):
-        # 1) Send SMS synchronously
-        sms_msg = f"TAKEOFF: The plane is taking off. Velocity={mag:.2f} m/s. It's go time!"
-        try:
-            self.send_sms(sms_msg)
-        except Exception as e:
-            _py_logger.critical(f"Takeoff SMS failed: {e}")
-
-        # 2) Send the status email synchronously
-        #    (capture & clear logs, run du, send_email)
-        logs = _log_stream.getvalue()
-        _log_stream.truncate(0)
-        _log_stream.seek(0)
-        try:
-            du_output = subprocess.check_output(
-                ['du', '-h', '/mnt/wildfire/data/'],
-                text=True, stderr=subprocess.STDOUT
-            )
-        except subprocess.CalledProcessError as e:
-            du_output = f"du error: {e.output or e}"
-        full_body = (
-            "Takeoff Alert: The plane is taking off.\n\n"
-            f"=== NODE LOGS ===\n{logs}\n\n"
-            f"=== DATA USAGE ===\n{du_output}"
-        )
-        try:
-            send_email(subject='Takeoff Alert', body=full_body)
-            _py_logger.critical("Status email sent: Takeoff Alert")
-        except EmailError as e:
-            _py_logger.critical(f"Takeoff email failed: {e}")
-
-        # 3) Finally, turn off the cellular modem
-        self.control_cellular(False)
-
-    def velocity_callback(self, msg):
-        self.velocity_msg_count += 1
-        if self.velocity_msg_count % 100:
+    def _check_maxvis_timeout(self):
+        if not self._maxvis_active:
             return
-        mag = math.sqrt(msg.vector.x**2 +
-                        msg.vector.y**2 +
-                        msg.vector.z**2)
+        if self._last_maxvis_msg is None:
+            return
+        elapsed = (self.get_clock().now() - self._last_maxvis_msg).nanoseconds / 1e9
+        if elapsed > self.MAXVIS_TIMEOUT_SEC:
+            self._maxvis_active = False
+            if self._maxvis_on_since is not None:
+                self._maxvis_on_time += time.time() - self._maxvis_on_since
+                self._maxvis_on_since = None
+            self._log('MAXVIS   Analog stream OFF')
 
-        if mag > 14.0 and not self.is_in_air:
-            self.is_in_air = True
-            _py_logger.critical(f"Takeoff detected: {mag:.2f} m/s")
-            self._executor.submit(self._takeoff_procedure, mag)
-        elif mag < 1.0 and self.is_in_air:
-            self.is_in_air = False
-            _py_logger.critical(f"Landing detected: {mag:.2f} m/s")
-            self._executor.submit(self.control_cellular, True)
+    # ── /save_images_trigger callback ─────────────────────────────────────────
+    def _trigger_cb(self, msg: Empty):
+        self._trigger_count += 1
+        mv_state = 'ON' if self._maxvis_active else 'OFF'
+        self._log(f'TRIGGER  Save trigger #{self._trigger_count} — MaxVis: {mv_state}')
 
-    # ─── Email Status Reports ──────────────────────────────
-    def _send_status_email(self, subject: str, body_intro: str):
-        # capture & clear logs immediately
-        logs = _log_stream.getvalue()
-        _log_stream.truncate(0)
-        _log_stream.seek(0)
-
-        # offload the heavy work
-        self._executor.submit(self._du_and_email, subject, body_intro, logs)
-
-    def _du_and_email(self, subject: str, body_intro: str, logs: str):
-        try:
-            du_output = subprocess.check_output(
-                ['du', '-h', '/mnt/wildfire/data/'],
-                text=True,
-                stderr=subprocess.STDOUT
-            )
-        except subprocess.CalledProcessError as e:
-            du_output = f"du error: {e.output or e}"
-
-        full_body = (
-            f"{body_intro}\n\n"
-            f"=== NODE LOGS ===\n{logs}\n\n"
-            f"=== DATA USAGE ===\n{du_output}"
+    # ── Email ─────────────────────────────────────────────────────────────────
+    def _startup_email_body(self) -> str:
+        ts = self._startup_time.strftime('%Y-%m-%d %H:%M:%S')
+        return (
+            f'TankerVision unit is online.\n\n'
+            f'Unit:     {self._unit_name}\n'
+            f'Plane:    {self._plane}\n'
+            f'Province: {self._province}\n'
+            f'Time:     {ts}\n'
+            f'Mode:     {self._mode}\n'
         )
 
-        try:
-            send_email(subject=subject, body=full_body)
-            _py_logger.critical(f"Status email sent: {subject}")
-        except EmailError as e:
-            _py_logger.critical(f"Error sending email: {e}")
+    def _try_send_startup_email(self):
+        if not self._email_to:
+            return
+        subject = f'TankerVision Online — {self._unit_name} ({self._plane})'
+        success = send_email_msmtp(self._email_to, subject, self._startup_email_body(), self._msmtprc)
+        if success:
+            self._email_sent = True
+            self._log('STATUS   Startup email sent')
+        else:
+            self._log('STATUS   Startup email failed — will retry')
 
+    def _retry_email(self):
+        if self._email_sent:
+            return
+        threading.Thread(target=self._try_send_startup_email, daemon=True).start()
+
+    # ── Shutdown ──────────────────────────────────────────────────────────────
+    def destroy_node(self):
+        self._write_footer()
+        self._log_file.flush()
+        self._log_file.close()
+        super().destroy_node()
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 def main(args=None):
     rclpy.init(args=args)
     node = StatusNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()
