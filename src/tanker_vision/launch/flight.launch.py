@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 Top-level launch file for TankerVision flight computer.
-Launches: Lucid Triton2 (arena_camera_node), IM19 IMU, analog camera (v4l2_camera)
+Launches: Lucid Triton2 (arena_camera_node), IM19 IMU, analog camera (v4l2_camera),
+          status_node
 """
 import os
-
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -19,6 +19,11 @@ _VIDEO_STANDARDS = {
     'NTSC': {'image_size': [720, 480], 'time_per_frame': [1001, 30000]},
 }
 
+# Path to global config — read by status_node at runtime
+_CONFIG_YAML = os.path.expanduser(
+    '~/tankervision_flight/config/tankervision.yaml'
+)
+
 
 def _launch_lucid_camera(_):
     node = Node(
@@ -32,11 +37,12 @@ def _launch_lucid_camera(_):
             {'height': 4600},
             {'exposure_time': 3000.0},
             {'pixelformat': 'bayer_rggb16'},
-            {'topic': '/cam0/image_raw'},
+        ],
+        remappings=[
+            ('/arena_camera_node/images', '/cam0/image_raw'),
         ],
     )
     return [node]
-
 
 
 def _launch_analog_camera(context):
@@ -50,11 +56,6 @@ def _launch_analog_camera(context):
 
     params = _VIDEO_STANDARDS[standard]
 
-    set_standard = ExecuteProcess(
-        cmd=['v4l2-ctl', '--device', device, '--set-standard', standard],
-        output='screen',
-    )
-
     node = Node(
         package='v4l2_camera',
         executable='v4l2_camera_node',
@@ -65,15 +66,26 @@ def _launch_analog_camera(context):
             {'image_size':      params['image_size']},
             {'time_per_frame':  params['time_per_frame']},
             {'camera_frame_id': 'analog_camera'},
-            {'topic':           '/cam1/image_raw'},
         ],
-	remappings=[
-        ('/image_raw', '/cam1/image_raw'),
-        ('/camera_info', '/cam1/camera_info'),
-    	],
+        remappings=[
+            ('/image_raw',    '/cam1/image_raw'),
+            ('/camera_info',  '/cam1/camera_info'),
+        ],
     )
+    return [node]
 
-    return [set_standard, node]
+
+def _launch_status_node(_):
+    node = Node(
+        package='tanker_vision',
+        executable='status_node',
+        name='status_node',
+        output='screen',
+        parameters=[
+            {'config': _CONFIG_YAML},
+        ],
+    )
+    return [node]
 
 
 def generate_launch_description():
@@ -98,6 +110,7 @@ def generate_launch_description():
 
     lucid_camera  = OpaqueFunction(function=_launch_lucid_camera)
     analog_camera = OpaqueFunction(function=_launch_analog_camera)
+    status_node   = OpaqueFunction(function=_launch_status_node)
 
     return LaunchDescription([
         arg_video_standard,
@@ -105,6 +118,7 @@ def generate_launch_description():
         im19_launch,
         lucid_camera,
         analog_camera,
+        status_node,
     ])
 
 

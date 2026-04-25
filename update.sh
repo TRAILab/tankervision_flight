@@ -31,34 +31,51 @@ info "Camera interface: $CAMERA_IFACE"
 # ── 1. Deploy configs ─────────────────────────────────────────────
 info "Deploying configs..."
 
+cp_config() {
+    local SRC="$1" DST="$2"
+    if [[ -f "$SRC" ]]; then
+        cp "$SRC" "$DST"
+    else
+        warn "  Skipping $(basename $SRC) — not found in repo (add it to deploy)"
+    fi
+}
+
 # chrony
-cp "$REPO_DIR/config/chrony/chrony.conf" /etc/chrony/chrony.conf
+cp_config "$REPO_DIR/config/chrony/chrony.conf" /etc/chrony/chrony.conf
 info "  chrony.conf"
 
 # gpsd
 mkdir -p /etc/systemd/system/gpsd.service.d/
-cp "$REPO_DIR/config/gpsd/gpsd-service-override.conf" /etc/systemd/system/gpsd.service.d/override.conf
-cp "$REPO_DIR/config/gpsd/gpsd-defaults" /etc/default/gpsd
+cp_config "$REPO_DIR/config/gpsd/gpsd-service-override.conf" /etc/systemd/system/gpsd.service.d/override.conf
+cp_config "$REPO_DIR/config/gpsd/gpsd-defaults" /etc/default/gpsd
 info "  gpsd config"
 
 # ptp4l — re-substitute interface name each time
 mkdir -p /etc/linuxptp
-sed "s/\[eno1\]/[$CAMERA_IFACE]/" "$REPO_DIR/config/ptp/ptp4l.conf" \
-    | tee /etc/linuxptp/ptp4l.conf > /dev/null
-info "  ptp4l.conf (iface: $CAMERA_IFACE)"
+if [[ -f "$REPO_DIR/config/ptp/ptp4l.conf" ]]; then
+    sed "s/\[eno1\]/[$CAMERA_IFACE]/" "$REPO_DIR/config/ptp/ptp4l.conf" \
+        | tee /etc/linuxptp/ptp4l.conf > /dev/null
+    info "  ptp4l.conf (iface: $CAMERA_IFACE)"
+else
+    warn "  Skipping ptp4l.conf — not found in repo"
+fi
 
 # udev rules
-cp "$REPO_DIR/config/udev/99-dfg-camera.rules" /etc/udev/rules.d/99-dfg-camera.rules
-cp "$REPO_DIR/config/udev/99-gps.rules"        /etc/udev/rules.d/99-gps.rules
+cp_config "$REPO_DIR/config/udev/99-dfg-camera.rules" /etc/udev/rules.d/99-dfg-camera.rules
+cp_config "$REPO_DIR/config/udev/99-gps.rules"        /etc/udev/rules.d/99-gps.rules
 udevadm control --reload-rules
 udevadm trigger
 info "  udev rules"
 
 # scripts
-cp "$REPO_DIR/scripts/configure-dfg-camera.sh" /usr/local/bin/configure-dfg-camera.sh
-chmod +x /usr/local/bin/configure-dfg-camera.sh
-cp "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" /usr/local/bin/identify_and_install_udev.sh
-chmod +x /usr/local/bin/identify_and_install_udev.sh
+if [[ -f "$REPO_DIR/scripts/configure-dfg-camera.sh" ]]; then
+    cp "$REPO_DIR/scripts/configure-dfg-camera.sh" /usr/local/bin/configure-dfg-camera.sh
+    chmod +x /usr/local/bin/configure-dfg-camera.sh
+fi
+if [[ -f "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" ]]; then
+    cp "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" /usr/local/bin/identify_and_install_udev.sh
+    chmod +x /usr/local/bin/identify_and_install_udev.sh
+fi
 info "  helper scripts"
 
 # ── 2. Deploy systemd services ────────────────────────────────────
@@ -131,12 +148,28 @@ colcon build --symlink-install --packages-skip xsens_mti_ros2_driver
 # ── 6. Summary ────────────────────────────────────────────────────
 echo ""
 info "Done. Active service status:"
-for SVC in ptp4l.service tankervision.service tanker_vision_status.service; do
+for SVC in ptp4l.service tankervision.service; do
     STATUS=$(systemctl is-active "$SVC" 2>/dev/null || echo "inactive")
     if [[ "$STATUS" == "active" ]]; then
         echo -e "  ${GREEN}●${NC} $SVC"
     else
         echo -e "  ${YELLOW}○${NC} $SVC ($STATUS)"
+    fi
+done
+
+# Check ROS nodes running inside tankervision.service
+echo ""
+info "ROS nodes (via ros2 node list):"
+set +u
+source /opt/ros/humble/setup.bash 2>/dev/null || true
+source "$REPO_DIR/install/setup.bash" 2>/dev/null || true
+set -u
+NODES=$(ros2 node list 2>/dev/null || echo "")
+for NODE in arena_camera_node analog_camera status_node im19_mems_node; do
+    if echo "$NODES" | grep -q "/$NODE"; then
+        echo -e "  ${GREEN}●${NC} $NODE"
+    else
+        echo -e "  ${YELLOW}○${NC} $NODE (not running)"
     fi
 done
 echo ""
