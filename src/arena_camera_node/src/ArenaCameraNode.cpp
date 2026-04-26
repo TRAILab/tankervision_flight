@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <sstream>
 #include <std_msgs/msg/empty.hpp>
+#include <std_msgs/msg/string.hpp>
 
 #include <cstring>    // memcopy
 #include <stdexcept>  // std::runtime_err
@@ -514,7 +515,7 @@ void ArenaCameraNode::save_raw_image_(Arena::IImage* pImage)
   localtime_r(&now_time_t, &tm_buf);
 
   std::ostringstream name;
-  name << raw_save_dir_.string()
+  name << raw_save_dir_
        << "/frame_" << frame_id
        << "_" << std::put_time(&tm_buf, "%Y%m%d_%H%M%S")
        << "_" << std::setw(6) << std::setfill('0') << now_us

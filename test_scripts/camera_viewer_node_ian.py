@@ -39,7 +39,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import Image
 from std_msgs.msg import Empty, String
 from rcl_interfaces.srv import SetParameters
@@ -51,6 +51,13 @@ ANALOG_TOPIC       = '/cam1/image_raw'
 SAVE_TRIGGER_TOPIC = '/save_images_trigger'
 
 # ── QoS ───────────────────────────────────────────────────────────────────────
+_LATCHED_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+)
+
 _BEST_EFFORT_QOS = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
     history=HistoryPolicy.KEEP_LAST,
@@ -273,6 +280,10 @@ class CameraViewerNode(Node):
         self._frame_analog = None
         self._lucid_diag   = {}
 
+        # Session path from status_node — update save_dir when received
+        self.create_subscription(
+            String, '/tankervision/session_path', self._session_cb, _LATCHED_QOS)
+
         os.makedirs(self._save_dir, exist_ok=True)
 
         if self._show_lucid:
@@ -345,6 +356,15 @@ class CameraViewerNode(Node):
         return lucid, analog
 
     # ── Save ──────────────────────────────────────────────────────────────────
+
+    def _session_cb(self, msg):
+        """Update save_dir when status_node publishes session path."""
+        session_dir = msg.data
+        new_save_dir = os.path.join(session_dir, 'saved_frames')
+        if new_save_dir != self._save_dir:
+            self._save_dir = new_save_dir
+            os.makedirs(self._save_dir, exist_ok=True)
+            self.get_logger().info(f'Save dir updated to: {self._save_dir}')
 
     def save_frames(self, lucid, analog):
         ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')

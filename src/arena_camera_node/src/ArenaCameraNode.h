@@ -64,6 +64,7 @@ class ArenaCameraNode : public rclcpp::Node
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr m_trigger_an_image_srv_;
 
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr save_trigger_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr session_path_sub_;
 
   std::atomic<bool> save_next_raw_{false};
   std::string raw_save_root_ = "/mnt/storage";

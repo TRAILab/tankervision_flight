@@ -5,6 +5,7 @@ Launches: Lucid Triton2 (arena_camera_node), IM19 IMU, analog camera (v4l2_camer
           status_node
 """
 import os
+import yaml
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -75,6 +76,30 @@ def _launch_analog_camera(context):
     return [node]
 
 
+def _launch_record_node(context):
+    import yaml, os
+    cfg_path = os.path.join(os.path.expanduser('~'),
+                            'tankervision_flight', 'config', 'tankervision.yaml')
+    try:
+        with open(cfg_path) as f:
+            cfg = yaml.safe_load(f)
+        mode = cfg.get('mode', 'testing')
+    except Exception:
+        mode = 'testing'
+
+    if mode != 'flight':
+        return []
+
+    node = Node(
+        package='tanker_vision',
+        executable='record_data_node',
+        name='record_data_node',
+        output='screen',
+        parameters=[{'config': cfg_path}],
+    )
+    return [node]
+
+
 def _launch_status_node(_):
     node = Node(
         package='tanker_vision',
@@ -111,6 +136,7 @@ def generate_launch_description():
     lucid_camera  = OpaqueFunction(function=_launch_lucid_camera)
     analog_camera = OpaqueFunction(function=_launch_analog_camera)
     status_node   = OpaqueFunction(function=_launch_status_node)
+    record_node   = OpaqueFunction(function=_launch_record_node)
 
     return LaunchDescription([
         arg_video_standard,
@@ -119,8 +145,10 @@ def generate_launch_description():
         lucid_camera,
         analog_camera,
         status_node,
+        record_node,
     ])
 
 
 if __name__ == '__main__':
     generate_launch_description()
+    

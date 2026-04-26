@@ -2,18 +2,14 @@
 """
 status_node.py — TankerVision flight status monitor.
 
-Startup:
-  - Print status banner to terminal AND write to flight log
-  - Send startup email via msmtp (retry every 5 min until success)
+Creates the session folder at startup and publishes its path on
+/tankervision/session_path (latched) so all nodes write to the same location.
 
-During flight (black box — written immediately on state change):
-  - /rosout: deduplicated state-change events per node
-  - v4l2-ctl --get-input: MaxVis signal ON/OFF via 2s poll
-  - /save_images_trigger: each trigger + MaxVis state
-
-On shutdown:
-  - Write session summary footer
-  - Copy ~/.ros/log/latest/ to /mnt/storage/ros_log_<timestamp>/
+Session structure:
+  /mnt/storage/YYYY-MM-DD/session_HH-MM-SS/
+    flight_log.txt
+    saved_frames/
+    ros_log/          (copied on shutdown)
 """
 
 import os
@@ -27,9 +23,9 @@ from datetime import datetime
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from rcl_interfaces.msg import Log
-from std_msgs.msg import Empty
+from std_msgs.msg import Empty, String
 import yaml
 
 
@@ -38,6 +34,12 @@ _ROSOUT_QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
     history=HistoryPolicy.KEEP_LAST,
     depth=100,
+)
+_LATCHED_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
 )
 
 # ── Terminal colours ──────────────────────────────────────────────────────────
@@ -48,11 +50,7 @@ BOLD = '\033[1m'
 NC   = '\033[0m'
 
 
-def _strip_ansi(text: str) -> str:
-    return re.sub(r'\033\[[0-9;]*m', '', text)
-
-
-# ── System checks ─────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def _load_yaml(path: str) -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
@@ -108,7 +106,6 @@ def service_active(name: str) -> bool:
 
 
 def ros_node_active(node_name: str) -> bool:
-    """Check if a ROS2 node is running via ros2 node list."""
     try:
         r = subprocess.run(['ros2', 'node', 'list'],
                            capture_output=True, text=True, timeout=3)
@@ -118,25 +115,13 @@ def ros_node_active(node_name: str) -> bool:
 
 
 def lucid_connected() -> bool:
-    """Check if arena_camera_node has connected to the camera (past waiting phase)."""
     try:
         logs = subprocess.run(
             ['journalctl', '-u', 'tankervision.service', '-n', '100', '--no-pager'],
             capture_output=True, text=True)
-        # Connected if we see Pixel format but no recent "waiting" after it
         return 'Pixel format' in logs.stdout
     except Exception:
         return False
-
-
-def storage_info(path: str):
-    try:
-        usage = shutil.disk_usage(path)
-        free  = usage.free  / (1024 ** 4)
-        total = usage.total / (1024 ** 4)
-        return round(free, 1), round(total, 1)
-    except Exception:
-        return None, None
 
 
 def has_internet() -> bool:
@@ -160,13 +145,22 @@ def send_email_msmtp(to: str, subject: str, body: str, msmtprc: str = None) -> b
         return False
 
 
+def storage_info(path: str):
+    try:
+        usage = shutil.disk_usage(path)
+        free  = usage.free  / (1024 ** 4)
+        total = usage.total / (1024 ** 4)
+        return round(free, 1), round(total, 1)
+    except Exception:
+        return None, None
+
+
 # ── Status node ───────────────────────────────────────────────────────────────
 class StatusNode(Node):
 
     EMAIL_RETRY_SEC = 300.0
     MAXVIS_POLL_SEC = 2.0
 
-    # Rosout patterns — deduplicated per state_key
     _NODE_PATTERNS = {
         'arena_camera_node': [
             (r'No arena camera.*Waiting',  'LUCID    Waiting for camera...',  'lucid_waiting'),
@@ -187,7 +181,6 @@ class StatusNode(Node):
         super().__init__('status_node')
 
         # ── Load config ───────────────────────────────────────────
-        # Default config path — works whether run manually or via systemd
         _default_cfg = os.path.join(
             os.path.expanduser('~'),
             'tankervision_flight', 'config', 'tankervision.yaml'
@@ -213,9 +206,16 @@ class StatusNode(Node):
         self._storage     = stor_cfg.get('root', '/mnt/storage')
         self._v4l2_device = analog_cfg.get('device', '/dev/video0')
 
+        # ── Create session folder ─────────────────────────────────
+        now = datetime.now()
+        date_str    = now.strftime('%Y-%m-%d')
+        session_str = now.strftime('session_%H-%M-%S')
+        self._session_dir = os.path.join(self._storage, date_str, session_str)
+        os.makedirs(self._session_dir, exist_ok=True)
+        os.makedirs(os.path.join(self._session_dir, 'saved_frames'), exist_ok=True)
 
         # ── State ─────────────────────────────────────────────────
-        self._startup_time    = datetime.now()
+        self._startup_time    = now
         self._email_sent      = False
         self._maxvis_active   = False
         self._trigger_count   = 0
@@ -225,7 +225,7 @@ class StatusNode(Node):
         self._lock            = threading.Lock()
         self._node_states: dict = {}
 
-        # ── System checks at startup ───────────────────────────────
+        # ── System checks ─────────────────────────────────────────
         self._chrony_ok   = chrony_synced()
         self._ptp_master  = ptp_master_active()
         self._ptp_slave   = ptp_slave_locked()
@@ -236,17 +236,26 @@ class StatusNode(Node):
         self._stor_free   = free
         self._stor_total  = total
 
-        # ── Open log file ─────────────────────────────────────────
-        ts = self._startup_time.strftime('%Y%m%d_%H%M%S')
-        log_path = os.path.join(self._storage, f'flight_log_{ts}.txt')
-        os.makedirs(self._storage, exist_ok=True)
-        self._log_file   = open(log_path, 'w', buffering=1)
-        self._ros_log_ts = ts
+        # ── Open log file in session folder ───────────────────────
+        log_path = os.path.join(self._session_dir, 'flight_log.txt')
+        self._log_file    = open(log_path, 'w', buffering=1)
+        self._ros_log_ts  = now.strftime('%Y%m%d_%H%M%S')
 
         # ── Write header and banner ───────────────────────────────
         self._write_header()
         self._write_banner_to_log()
         self._print_banner()
+
+        # ── Publishers ────────────────────────────────────────────
+        # Latched session path — new subscribers get it immediately
+        self._session_pub = self.create_publisher(
+            String, '/tankervision/session_path', _LATCHED_QOS)
+
+        # ── Publish session path ──────────────────────────────────
+        msg = String()
+        msg.data = self._session_dir
+        self._session_pub.publish(msg)
+        self._log(f'STATUS   session: {self._session_dir}')
 
         # ── Subscriptions ─────────────────────────────────────────
         self.create_subscription(Log,   '/rosout',              self._rosout_cb,  _ROSOUT_QOS)
@@ -260,9 +269,8 @@ class StatusNode(Node):
 
         self._log('STATUS   online')
 
-    # ── Banner helpers ────────────────────────────────────────────────────────
+    # ── Banner ────────────────────────────────────────────────────────────────
     def _banner_rows(self) -> list:
-        """Return list of (label, ok, ok_text, fail_text) for each status item."""
         stor_text = (f'{self._stor_free}TB free / {self._stor_total}TB'
                      if self._stor_total else 'not mounted')
         return [
@@ -284,6 +292,7 @@ class StatusNode(Node):
         print(f'{BOLD}  TankerVision — {self._unit_name} ({self._plane}){NC}')
         print(f'  {self._province} | Mode: {self._mode}')
         print(f'  {ts}')
+        print(f'  Session: {self._session_dir}')
         print(f'{BOLD}{CYN}{div}{NC}')
         for label, ok, ok_text, fail_text in self._banner_rows():
             dot  = f'{GRN}●{NC}' if ok else f'{YEL}○{NC}'
@@ -292,7 +301,6 @@ class StatusNode(Node):
         print(f'{BOLD}{CYN}{div}{NC}\n')
 
     def _write_banner_to_log(self):
-        """Write plain-text version of banner to flight log for systemd capture."""
         ts  = self._startup_time.strftime('%Y-%m-%d %H:%M:%S')
         div = '─' * 52
         lines = [
@@ -300,6 +308,7 @@ class StatusNode(Node):
             f'  TankerVision — {self._unit_name} ({self._plane})',
             f'  {self._province} | Mode: {self._mode}',
             f'  {ts}',
+            f'  Session: {self._session_dir}',
             div,
         ]
         for label, ok, ok_text, fail_text in self._banner_rows():
@@ -331,6 +340,7 @@ class StatusNode(Node):
             f'Province:   {self._province}',
             f'Start time: {ts}',
             f'Mode:       {self._mode}',
+            f'Session:    {self._session_dir}',
             f'Chrony:     {"synced"     if self._chrony_ok  else "NOT SYNCED"}',
             f'PTP master: {"active"     if self._ptp_master else "not active"}',
             f'PTP slave:  {"locked"     if self._ptp_slave  else "uncalibrated"}',
@@ -365,7 +375,7 @@ class StatusNode(Node):
         with self._lock:
             self._log_file.write('\n'.join(lines) + '\n')
 
-    # ── /rosout — deduplicated ────────────────────────────────────────────────
+    # ── /rosout ───────────────────────────────────────────────────────────────
     def _rosout_cb(self, msg: Log):
         if msg.name == 'status_node':
             return
@@ -375,7 +385,6 @@ class StatusNode(Node):
                 if not self._node_states.get(state_key):
                     self._node_states[state_key] = True
                     self._log(label)
-                    # Update lucid banner state live
                     if state_key == 'lucid_connected':
                         self._lucid_ok = True
                         print(f'  {GRN}●{NC}  Lucid          {GRN}connected{NC}')
@@ -390,7 +399,7 @@ class StatusNode(Node):
                 self._log(f'{level:<8} [{msg.name}] {msg.msg}')
                 self._error_count += 1
 
-    # ── MaxVis — v4l2-ctl poll ────────────────────────────────────────────────
+    # ── MaxVis ────────────────────────────────────────────────────────────────
     def _poll_maxvis(self):
         threading.Thread(target=self._check_maxvis_signal, daemon=True).start()
 
@@ -425,13 +434,13 @@ class StatusNode(Node):
             f'Plane:      {self._plane}\n'
             f'Province:   {self._province}\n'
             f'Time:       {ts}\n'
-            f'Mode:       {self._mode}\n\n'
+            f'Mode:       {self._mode}\n'
+            f'Session:    {self._session_dir}\n\n'
             f'Chrony:     {"synced"      if self._chrony_ok  else "NOT SYNCED"}\n'
             f'PTP master: {"active"      if self._ptp_master else "not active"}\n'
             f'PTP slave:  {"locked"      if self._ptp_slave  else "uncalibrated"}\n'
             f'GNSS:       {"recording"   if self._gnss_ok    else "not running"}\n'
             f'IMU:        {"running"     if self._imu_ok     else "not running"}\n'
-            f'Lucid:      {"connected"   if self._lucid_ok   else "waiting"}\n'
         )
 
     def _try_send_startup_email(self):
@@ -463,14 +472,13 @@ class StatusNode(Node):
         ros_log = os.path.expanduser('~/.ros/log/latest')
         if not os.path.exists(ros_log):
             return
-        dest = os.path.join(self._storage, f'ros_log_{self._ros_log_ts}')
+        dest = os.path.join(self._session_dir, 'ros_log')
         try:
             shutil.copytree(ros_log, dest)
         except Exception:
             pass
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
 def main(args=None):
     rclpy.init(args=args)
     node = StatusNode()

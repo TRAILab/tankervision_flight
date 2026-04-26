@@ -1,115 +1,197 @@
-import rclpy
-from rclpy.node import Node
-from sensor_msgs.msg import Image
-from cv_bridge import CvBridge
-from ultralytics import YOLO
-import time
-from datetime import datetime
+#!/usr/bin/env python3
+"""
+record_data_node.py — TankerVision fire detection and recording node.
+Flight mode only.
+
+Subscribes to /tankervision/session_path to get the session folder.
+On fire detection:
+  - Publishes /save_images_trigger (arena_camera_node saves full-res raw)
+  - Starts rosbag in session_folder/fire_<ts>/
+  - Records: /cam0/image_raw, /cam1/image_raw, /im19/imu
+"""
+
 import os
 import subprocess
-from std_msgs.msg import String
+import time
+from datetime import datetime
+
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+from sensor_msgs.msg import Image
+from std_msgs.msg import Empty, String
+from cv_bridge import CvBridge
+from ultralytics import YOLO
+import yaml
+
+
+_IMG_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=3,
+)
+_LATCHED_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+)
+
+
+def _load_yaml(path: str) -> dict:
+    with open(path) as f:
+        return yaml.safe_load(f)
 
 
 class RecordDataNode(Node):
+
     def __init__(self):
         super().__init__('record_data_node')
-        
-        # Load YOLO model (assuming a YOLOv8 variant with segmentation if needed)
-        self.yolo_model = YOLO('/home/trail/Desktop/TANKER_VISION/ros2_ws/src/tanker_vision/tanker_vision/fire_detection.pt', verbose=False)
-        self.cv_bridge = CvBridge()
-        self.path_root = '/mnt/wildfire/data'  # Path to save the bag files
-        self.record_since_last_detection = 20  # seconds to record after last detection
-        
-        # Recording state variables
-        self.is_recording = False
-        self.recording_end_time = 0
-        self.process = None
-        self.image_count = 0
 
-        # Subscribe to the image topic
-        self.subscription = self.create_subscription(
-            Image,
-            '/cam0/image_raw',
-            self.image_callback,
-            3  # QoS profile (queue size)
+        # ── Load config ───────────────────────────────────────────
+        _default_cfg = os.path.join(
+            os.path.expanduser('~'),
+            'tankervision_flight', 'config', 'tankervision.yaml'
         )
-        
-        # Timer to manage recording duration
-        self.recording_timer = self.create_timer(1, self.check_recording_status)
+        yaml_path = self.declare_parameter('config', _default_cfg).value
+        try:
+            cfg = _load_yaml(yaml_path)
+        except Exception as e:
+            self.get_logger().error(f'Failed to load config: {e}')
+            cfg = {}
 
-        self.status_publisher = self.create_publisher(String, '/record_data/status', 10)
-        self.get_logger().info("Record Data Node started.")
+        trigger_cfg = cfg.get('trigger', {})
+        yolo_cfg    = cfg.get('yolo', {})
 
-    def publish_status(self, status_str):
-        msg = String()
-        msg.data = status_str
-        self.status_publisher.publish(msg)
+        self._timeout_sec  = float(trigger_cfg.get('timeout_sec', 20))
+        self._cooldown_sec = float(trigger_cfg.get('cooldown_sec', 5))
+        self._fire_class   = int(yolo_cfg.get('fire_class', 2))
+        self._confidence   = float(yolo_cfg.get('confidence', 0.3))
 
-    def image_callback(self, msg):
-        self.image_count += 1
-        # Convert ROS Image message to an OpenCV image (RGB8 encoding)
-        cv_image = self.cv_bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-        
-        # Run YOLO inference on the image
-        results = self.yolo_model(cv_image, conf=0.3, verbose=False) # show=True is not needed for processing, remove it if not required
-        
-        # Check if the class of interest is detected
-        detected_class = False
-        # Assuming results[0].boxes is iterable and each box has a .cls attribute,
-        # and that self.yolo_model.names is a mapping from class indices to names.
-        if results and hasattr(results[0], "boxes"):
+        # Resolve model path
+        model_path = yolo_cfg.get('model', 'src/tanker_vision/tanker_vision/fire_detection.pt')
+        if not os.path.isabs(model_path):
+            repo_root  = os.path.join(os.path.expanduser('~'), 'tankervision_flight')
+            model_path = os.path.join(repo_root, model_path)
+
+        # ── Session path — wait for status_node to publish it ─────
+        self._session_dir  = None
+
+        # ── Load YOLO ─────────────────────────────────────────────
+        self.get_logger().info(f'Loading YOLO model: {model_path}')
+        self._model  = YOLO(model_path, verbose=False)
+        self._bridge = CvBridge()
+
+        # ── Recording state ───────────────────────────────────────
+        self._is_recording   = False
+        self._recording_end  = 0.0
+        self._cooldown_until = 0.0
+        self._process        = None
+
+        # ── Publishers ────────────────────────────────────────────
+        self._trigger_pub = self.create_publisher(Empty,  '/save_images_trigger', 10)
+        self._status_pub  = self.create_publisher(String, '/record_data/status',  10)
+
+        # ── Subscriptions ─────────────────────────────────────────
+        self.create_subscription(
+            String, '/tankervision/session_path', self._session_cb, _LATCHED_QOS)
+        self.create_subscription(
+            Image, '/cam0/image_raw', self._image_cb, _IMG_QOS)
+
+        # ── Timers ────────────────────────────────────────────────
+        self.create_timer(1.0, self._check_recording_status)
+
+        self.get_logger().info(
+            f'RecordDataNode ready — timeout:{self._timeout_sec}s '
+            f'cooldown:{self._cooldown_sec}s conf:{self._confidence}')
+
+    # ── Session path callback ─────────────────────────────────────────────────
+    def _session_cb(self, msg: String):
+        if not self._session_dir:
+            self._session_dir = msg.data
+            self.get_logger().info(f'Session path: {self._session_dir}')
+
+    # ── Image callback — YOLO inference ───────────────────────────────────────
+    def _image_cb(self, msg: Image):
+        if self._session_dir is None:
+            return  # Wait until we have a session path
+
+        now = time.time()
+        if now < self._cooldown_until:
+            self._publish_status('COOLDOWN')
+            return
+
+        try:
+            cv_img = self._bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        except Exception as e:
+            self.get_logger().warn(f'cv_bridge error: {e}')
+            return
+
+        results = self._model(cv_img, conf=self._confidence, verbose=False)
+
+        fire_detected = False
+        if results and hasattr(results[0], 'boxes'):
             for box in results[0].boxes:
-                if int(box.cls) == 2:
-                    detected_class = True
+                if int(box.cls) == self._fire_class:
+                    fire_detected = True
                     break
 
-        # If a car is detected, start recording or reset the timer if already recording
-        if detected_class:  # Check every 10 images
-            self.get_logger().info("Fire detected, starting or resetting recording timer.")
-            self.start_or_reset_recording()
-        
-        if not self.is_recording:
-            self.publish_status("SCANNING")
-        elif self.process and self.process.poll() is None:
-            self.publish_status("RECORDING")
+        if fire_detected:
+            self.get_logger().info('Fire detected')
+            self._trigger_pub.publish(Empty())
+            self._start_or_reset_recording()
+            self._publish_status('RECORDING' if self._is_recording else 'SCANNING')
 
-
-    def  start_or_reset_recording(self):
-        if self.is_recording:
-            self.recording_end_time = time.time() + self.record_since_last_detection
+    # ── Recording control ─────────────────────────────────────────────────────
+    def _start_or_reset_recording(self):
+        now = time.time()
+        if self._is_recording:
+            self._recording_end = now + self._timeout_sec
         else:
-            now = datetime.now()
-            ts = now.strftime("%Y-%m-%d_%H-%M-%S")
-            self.bag_path = os.path.join(self.path_root, ts)
+            ts       = datetime.now().strftime('%Y%m%d_%H%M%S')
+            bag_path = os.path.join(self._session_dir, f'fire_{ts}')
+            os.makedirs(self._session_dir, exist_ok=True)
             cmd = [
-                "/opt/ros/humble/bin/ros2", "bag", "record",
-                "-o", self.bag_path,
-                "-a", "--compression-mode", "message",
-                "--compression-format", "zstd", "-b", "100000000"
+                '/opt/ros/humble/bin/ros2', 'bag', 'record',
+                '--storage', 'mcap',
+                '-o', bag_path,
+                '/cam0/image_raw',
+                '/cam1/image_raw',
+                '/im19/imu',
             ]
-            self.process = subprocess.Popen(cmd)
-            self.is_recording = True
-            self.recording_end_time = time.time() + self.record_since_last_detection
-            self.get_logger().info(f"Started bag recording to {self.bag_path}")
-            
-    def check_recording_status(self):
-        # Check if the recording duration has elapsed
-        if self.is_recording and time.time() > self.recording_end_time:
-            # Terminate the bag recording subprocess if it is still running
-            if self.process is not None:
-                self.process.terminate()
-                self.is_recording = False
-            self.get_logger().info("Stopped bag recording after {} seconds.".format(self.record_since_last_detection))
+            self._process      = subprocess.Popen(cmd)
+            self._is_recording = True
+            self._recording_end = now + self._timeout_sec
+            self.get_logger().info(f'Started rosbag: {bag_path}')
+
+    def _check_recording_status(self):
+        if self._is_recording and time.time() > self._recording_end:
+            self._stop_recording()
+
+    def _stop_recording(self):
+        if self._process is not None:
+            self._process.terminate()
+            self._process = None
+        self._is_recording   = False
+        self._cooldown_until = time.time() + self._cooldown_sec
+        self.get_logger().info(
+            f'Stopped rosbag — cooldown {self._cooldown_sec}s')
+        self._publish_status('SCANNING')
+
+    def _publish_status(self, status: str):
+        msg = String()
+        msg.data = status
+        self._status_pub.publish(msg)
 
     def destroy_node(self):
+        if self._process is not None:
+            self._process.terminate()
         super().destroy_node()
-        if self.process is not None:
-            self.process.terminate()
+
 
 def main(args=None):
     rclpy.init(args=args)
     node = RecordDataNode()
-    
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -117,6 +199,7 @@ def main(args=None):
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

@@ -42,6 +42,11 @@ analog_camera:
     image_size: [720, 576]
     time_per_frame: [1, 25]
 
+yolo:
+  model: src/tanker_vision/tanker_vision/fire_detection.pt
+  fire_class: 2
+  confidence: 0.3
+ 
 ptp:
   interface: auto
   require_sync_before_launch: true
