@@ -1,8 +1,11 @@
 #!/bin/bash
-#!/bin/bash
 set -euo pipefail
 
 while [[ ! -e /dev/gnss_raw ]]; do
+    sleep 1
+done
+
+while [[ $(date +%Y) -lt 2020 ]]; do
     sleep 1
 done
 
@@ -19,4 +22,4 @@ while true; do
     OUTFILE="$OUTPUT_DIR/gnss_$(date +%Y%m%d_%H%M%S).ubx"
     timeout 1800 cat /dev/gnss_raw > "$OUTFILE" || true
 done
-
+ß

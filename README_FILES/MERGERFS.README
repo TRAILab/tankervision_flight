@@ -1,0 +1,62 @@
+### Install the mergefs
+```
+sudo apt update
+sudo apt install mergerfs
+```
+
+### Check the SSDs which are already mounted with strange name
+```lsblk```
+
+### Find the SSDs and umount them
+For example, 
+```sudo umount “/media/atlas/Crucial X10”```
+
+### Setup new mount
+```
+sudo mkdir -p /mnt/hdd0
+sudo mkdir -p /mnt/hdd1
+sudo mkdir -p /mnt/hdd2
+```
+
+### Find the UUID and the TYPE
+```
+sudo blkid
+```
+### Change the /etc/fstab file
+Add these lines.
+NEED TO CHANGE THE UUID, and the TYPE
+```
+UUID=a1b2c3d4-e5f6-7890-abcd-ef1234567890  /mnt/hdd0  ext4  defaults,nofail  0  2
+UUID=b2c3d4e5-f6a7-8901-bcde-f12345678901  /mnt/hdd1  ext4  defaults,nofail  0  2
+UUID=b2c3d4e5-f6a7-8901-bcde-f12345678901  /mnt/hdd2  ext4  defaults,nofail  0  2
+```
+
+### MUST CHECK!! IF ISSUES, THE MACHINE WILL NOT REBOOT ANYMORE
+```
+sudo systemctl daemon-reload
+sudo mount -a  # NOTHING SHOULD BE OUTPUT
+df -h /mnt/hdd0 /mnt/hdd1 /mnt/hdd2
+```
+
+### Merge
+```
+sudo mkdir -p /mnt/storage
+sudo nano /etc/fstab
+
+# add merge command
+/mnt/hdd0:/mnt/hdd1:/mnt/hdd2  /mnt/storage  mergerfs  allow_other,cache.files=off,category.create=epmfs,func.getattr=newest,dropcacheonclose=false,minfreespace=100G 0 0
+
+sudo nano /etc/fuse.con # set #user_allow_other to user_allow_other
+```
+
+###  MUST CHECK AGAIN!! IF ISSUES, THE MACHINE WILL NOT REBOOT ANYMORE
+```
+sudo systemctl daemon-reload
+sudo mount -a  # NOTHING SHOULD BE OUTPUT
+df -h /mnt/storage
+```
+
+### Run the test scripts.
+```
+python3 test_ssd.py
+```

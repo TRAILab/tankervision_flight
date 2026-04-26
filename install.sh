@@ -49,6 +49,9 @@ sed "s/eno1/$CAMERA_IFACE/g" "$REPO_DIR/startup_scripts/ptp4l.service" | sudo te
 sudo cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/
 CURRENT_USER=$(logname)
 sudo sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/tankervision.service
+sudo cp "$REPO_DIR/startup_scripts/gnss-record.service" /etc/systemd/system/
+sudo cp "$REPO_DIR/startup_scripts/gnss_record.sh" /usr/local/bin/gnss_record.sh
+sudo chmod +x /usr/local/bin/gnss_record.sh
 
 echo "[install] Configuring Lucid Triton2 GigE camera network interface ($CAMERA_IFACE)..."
 if nmcli connection show "$CAMERA_IFACE" &>/dev/null; then
