@@ -76,10 +76,6 @@ if [[ -f "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" ]]; then
     cp "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" /usr/local/bin/identify_and_install_udev.sh
     chmod +x /usr/local/bin/identify_and_install_udev.sh
 fi
-if [[ -f "$REPO_DIR/startup_scripts/gnss_record.sh" ]]; then
-    cp "$REPO_DIR/startup_scripts/gnss_record.sh" /usr/local/bin/gnss_record.sh
-    chmod +x /usr/local/bin/gnss_record.sh
-fi
 info "  helper scripts"
 
 # ── 2. Deploy systemd services ────────────────────────────────────
@@ -97,14 +93,10 @@ cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/tankervi
 sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/tankervision.service
 info "  tankervision.service (user: $CURRENT_USER)"
 
-# remaining services — copy as-is
+# remaining active services — copy as-is
 for SVC in \
-    tanker_vision.service \
-    tanker_vision_status.service \
     gpsd-chrony.service \
-    socat-pty.service \
-    setup_eno1.service \
-    upload.service
+    gnss-record.service
 do
     if [[ -f "$REPO_DIR/startup_scripts/$SVC" ]]; then
         cp "$REPO_DIR/startup_scripts/$SVC" /etc/systemd/system/
@@ -152,7 +144,7 @@ colcon build --symlink-install --packages-skip xsens_mti_ros2_driver
 # ── 6. Summary ────────────────────────────────────────────────────
 echo ""
 info "Done. Active service status:"
-for SVC in ptp4l.service tankervision.service tanker_vision_status.service gnss-record.service; do
+for SVC in ptp4l.service tankervision.service; do
     STATUS=$(systemctl is-active "$SVC" 2>/dev/null || echo "inactive")
     if [[ "$STATUS" == "active" ]]; then
         echo -e "  ${GREEN}●${NC} $SVC"

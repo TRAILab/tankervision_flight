@@ -67,7 +67,7 @@ class ArenaCameraNode : public rclcpp::Node
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr session_path_sub_;
 
   std::atomic<bool> save_next_raw_{false};
-  std::string raw_save_root_ = "/mnt/storage";
+  std::string raw_save_root_;
   std::filesystem::path raw_save_dir_;
   std::filesystem::path make_raw_save_dir_();
 

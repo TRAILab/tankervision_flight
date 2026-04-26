@@ -86,6 +86,9 @@ void ArenaCameraNode::parse_parameters_()
     pub_qos_reliability_ = this->declare_parameter("qos_reliability", "");
     is_passed_pub_qos_reliability_ = pub_qos_reliability_ != "";
 
+    nextParameterToDeclare = "raw_save_root";
+    raw_save_root_ = this->declare_parameter<std::string>("raw_save_root", "/mnt/storage");
+
   } catch (rclcpp::ParameterTypeException& e) {
     log_err(nextParameterToDeclare + " argument");
     throw;
