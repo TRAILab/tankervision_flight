@@ -4,9 +4,9 @@
 mode: testing
 
 unit:
-  name: argus
-  plane_number: BD-122
-  province: British Columbia
+  name: atlas
+  plane_number: BD-126
+  province: Alberta
 
 notifications:
   email_to: wildfire@robotics.utias.utoronto.ca
