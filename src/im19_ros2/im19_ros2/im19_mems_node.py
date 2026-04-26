@@ -151,7 +151,9 @@ class IM19MemsNode(Node):
 
         self.try_open_serial(initial=True)
 
-    def _make_session_dir(self):
+    def _make_session_dir(self) -> bool:
+        if time.localtime().tm_year < 2020:
+            return False
         now = time.localtime()
         self.output_dir = os.path.join(
             self._output_dir_base,
@@ -159,12 +161,14 @@ class IM19MemsNode(Node):
             time.strftime("imu_%H-%M-%S", now),
         )
         os.makedirs(self.output_dir, exist_ok=True)
+        return True
 
     def _ensure_mems_file(self):
         if self.mems_file is not None:
             return
         if self.output_dir == self._output_dir_base:
-            self._make_session_dir()
+            if not self._make_session_dir():
+                return
         path = os.path.join(self.output_dir, f"im19_mems_raw_{time.strftime('%Y%m%d_%H%M%S')}.bin")
         self.mems_file = open(path, "ab")
         self.get_logger().info(f"MEMS output: {path}")
@@ -173,7 +177,8 @@ class IM19MemsNode(Node):
         if self.navi_file is not None:
             return
         if self.output_dir == self._output_dir_base:
-            self._make_session_dir()
+            if not self._make_session_dir():
+                return
         path = os.path.join(self.output_dir, f"im19_navi_raw_{time.strftime('%Y%m%d_%H%M%S')}.bin")
         self.navi_file = open(path, "ab")
         self.get_logger().info(f"NAVI output: {path}")

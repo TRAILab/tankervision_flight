@@ -53,8 +53,10 @@ sudo nano /etc/udev/rules.d/99-usb-path-names.rules
 
 Add the following line (change `ID_PATH` and the symlink name to match your device):
 
-```
+```im19_mems
 SUBSYSTEM=="tty", ENV{ID_PATH}=="platform-3610000.usb-usb-0:1.3:1.0", SYMLINK+="gnss_raw"
+SUBSYSTEM=="tty", ENV{ID_PATH}=="platform-3610000.usb-usb-0:2.2.4:1.0", SYMLINK+="gnss_raw"
+SUBSYSTEM=="tty", ENV{ID_PATH}=="platform-3610000.usb-usb-0:2.2.3:1.0", SYMLINK+="im19_mems"
 ```
 
 ### Reload and Apply Rules

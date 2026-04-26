@@ -76,6 +76,10 @@ if [[ -f "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" ]]; then
     cp "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" /usr/local/bin/identify_and_install_udev.sh
     chmod +x /usr/local/bin/identify_and_install_udev.sh
 fi
+if [[ -f "$REPO_DIR/startup_scripts/gnss_record.sh" ]]; then
+    cp "$REPO_DIR/startup_scripts/gnss_record.sh" /usr/local/bin/gnss_record.sh
+    chmod +x /usr/local/bin/gnss_record.sh
+fi
 info "  helper scripts"
 
 # ── 2. Deploy systemd services ────────────────────────────────────
@@ -87,7 +91,6 @@ sed "s/eno1/$CAMERA_IFACE/g" "$REPO_DIR/startup_scripts/ptp4l.service" \
 info "  ptp4l.service"
 
 # tankervision — always write fresh from template then substitute user
-# (avoids the silent no-op on re-run if FLIGHT_USER was already replaced)
 CURRENT_USER=$(logname 2>/dev/null || echo "${SUDO_USER:-trail}")
 cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/tankervision.service
 sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/tankervision.service
@@ -108,6 +111,14 @@ done
 info "Reloading systemd..."
 systemctl daemon-reload
 
+# Services that must always be enabled
+for SVC in gnss-record.service; do
+    if ! systemctl is-enabled --quiet "$SVC" 2>/dev/null; then
+        systemctl enable "$SVC"
+        info "  enabled $SVC"
+    fi
+done
+
 # ── 4. Restart running services ───────────────────────────────────
 info "Restarting affected services..."
 
@@ -126,15 +137,15 @@ restart_svc() {
 }
 
 restart_svc chrony
-restart_svc gpsd.service        # stop/start avoids masked gpsd.socket issue
+restart_svc gpsd.service
 restart_svc ptp4l.service
 restart_svc gpsd-chrony.service
 restart_svc tankervision.service
 restart_svc tanker_vision_status.service
+restart_svc gnss-record.service
 
 # ── 5. Rebuild ROS2 workspace ─────────────────────────────────────
 info "Building ROS2 workspace..."
-# Temporarily disable -u: ROS setup.bash references unset variables internally
 set +u
 source /opt/ros/humble/setup.bash
 set -u
@@ -144,7 +155,7 @@ colcon build --symlink-install --packages-skip xsens_mti_ros2_driver
 # ── 6. Summary ────────────────────────────────────────────────────
 echo ""
 info "Done. Active service status:"
-for SVC in ptp4l.service tankervision.service; do
+for SVC in ptp4l.service tankervision.service gnss-record.service; do
     STATUS=$(systemctl is-active "$SVC" 2>/dev/null || echo "inactive")
     if [[ "$STATUS" == "active" ]]; then
         echo -e "  ${GREEN}●${NC} $SVC"

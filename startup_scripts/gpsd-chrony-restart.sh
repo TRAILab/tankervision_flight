@@ -12,7 +12,7 @@ fi
 sleep 2
 
 # Start gpsd with the given device and PPS source
-if ! gpsd -n /dev/ttyV1 /dev/pps1; then
+if ! gpsd -n /dev/ttyACM0 /dev/pps1; then
     echo "gpsd failed to start."
     exit 1
 fi
