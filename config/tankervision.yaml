@@ -4,8 +4,8 @@
 mode: testing
 
 unit:
-  name: atlas
-  plane_number: BD-126
+  name: helios
+  plane_number: BD-124
   province: Alberta
 
 notifications:
@@ -27,7 +27,7 @@ lucid_camera:
   topic: /cam0/image_raw
   width: 5320
   height: 4600
-  exposure_time: 3000.0
+  exposure_time: 1000.0
   pixelformat: bayer_rggb16
   qos_reliability: reliable
 

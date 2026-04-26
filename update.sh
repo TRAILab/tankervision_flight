@@ -141,7 +141,7 @@ restart_svc gpsd.service
 restart_svc ptp4l.service
 restart_svc gpsd-chrony.service
 restart_svc tankervision.service
-restart_svc tanker_vision_status.service
+#restart_svc tanker_vision_status.service
 restart_svc gnss-record.service
 
 # ── 5. Rebuild ROS2 workspace ─────────────────────────────────────

@@ -5,6 +5,8 @@ import time
 import struct
 from pathlib import Path
 
+from datetime import datetime, timezone, timedelta
+from builtin_interfaces.msg import Time
 import serial
 import rclpy
 from rclpy.node import Node
@@ -19,6 +21,51 @@ NAVI_LEN = 100
 TAIL     = b"ed"
 FMT_MEMS = "<4sd9fH2s"
 G_TO_MPS2 = 9.80665
+
+def utc_hhmmss_to_ros_time(utc_raw: float) -> Time:
+    """
+    Convert IM19 UTC time-of-day in hhmmss.ss format into a ROS Time message.
+
+    Example:
+        193113.76550619243 -> today at 19:31:13.765506192 UTC
+
+    Because the IMU gives no date, this uses the Jetson's current UTC date.
+    """
+    utc_now = datetime.now(timezone.utc)
+
+    hhmmss_int = int(utc_raw)
+    frac = float(utc_raw) - hhmmss_int
+
+    hour = hhmmss_int // 10000
+    minute = (hhmmss_int // 100) % 100
+    second = hhmmss_int % 100
+
+    # nanoseconds from fractional seconds
+    nanosec = int(round(frac * 1_000_000_000))
+
+    # handle possible rounding edge case, e.g. .9999999996 rounds to 1e9
+    if nanosec >= 1_000_000_000:
+        second += 1
+        nanosec -= 1_000_000_000
+
+    stamp_dt = utc_now.replace(
+        hour=hour,
+        minute=minute,
+        second=second,
+        microsecond=0,
+    )
+
+    # Handle midnight rollover if Jetson UTC date and IMU UTC time-of-day
+    # are on opposite sides of midnight.
+    delta = stamp_dt - utc_now
+    if delta > timedelta(hours=12):
+        stamp_dt -= timedelta(days=1)
+    elif delta < timedelta(hours=-12):
+        stamp_dt += timedelta(days=1)
+
+    sec = int(stamp_dt.timestamp())
+
+    return Time(sec=sec, nanosec=nanosec)
 
 
 def parse_mems_packet(packet: bytes):
@@ -253,7 +300,7 @@ class IM19MemsNode(Node):
 
     def publish_imu(self, data: dict):
         msg = Imu()
-        msg.header.stamp    = self.get_clock().now().to_msg()
+        msg.header.stamp    = utc_hhmmss_to_ros_time(float(data["utc_raw"]))
         msg.header.frame_id = self.frame_id
         msg.orientation_covariance[0]         = -1.0
         msg.angular_velocity_covariance[0]    = -1.0
