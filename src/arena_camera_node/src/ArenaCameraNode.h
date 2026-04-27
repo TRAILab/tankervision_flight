@@ -3,37 +3,35 @@
 // TODO
 // - remove m_ before private members
 // - add const to member functions
-// fix includes in all files
-// - should we rclcpp::shutdown in construction instead
-//
+// - fix includes in all files
+// - should we rclcpp::shutdown in construction instead?
 
 // std
-#include <chrono>      //chrono_literals
+#include <atomic>
+#include <cstdio>
 #include <filesystem>
-#include <functional>  // std::bind , std::placeholders
-
-// ros
-#include <rclcpp/rclcpp.hpp>
-#include <rclcpp/timer.hpp>           // WallTimer
-#include <sensor_msgs/msg/image.hpp>  //image msg published
-#include <std_srvs/srv/trigger.hpp>   // Trigger
-#include "std_msgs/msg/string.hpp"
-#include <std_msgs/msg/empty.hpp>
-
-// arena sdk
-#include "ArenaApi.h"
-
+#include <memory>
 #include <mutex>
+#include <string>
+#include <vector>
+
+// ROS
+#include <builtin_interfaces/msg/time.hpp>
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp/timer.hpp>
+#include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/string.hpp>
 
+// Arena SDK
+#include "ArenaApi.h"
 
 class ArenaCameraNode : public rclcpp::Node
 {
  public:
   ArenaCameraNode() : Node("arena_camera_node")
   {
-    // set stdout buffer size for ROS defined size BUFSIZE
+    // Set stdout buffer size for ROS-defined size BUFSIZ.
     setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 
     log_info(std::string("Creating \"") + this->get_name() + "\" node");
@@ -47,100 +45,128 @@ class ArenaCameraNode : public rclcpp::Node
     log_info(std::string("Destroying \"") + this->get_name() + "\" node");
   }
 
-  void log_debug(std::string msg) { RCLCPP_DEBUG(this->get_logger(), msg.c_str()); };
-  void log_info(std::string msg) { RCLCPP_INFO(this->get_logger(), msg.c_str()); };
-  void log_warn(std::string msg) { RCLCPP_WARN(this->get_logger(), msg.c_str()); };
-  void log_err(std::string msg) { RCLCPP_ERROR(this->get_logger(), msg.c_str()); };
-  void save_next_raw_callback_(const std_msgs::msg::Empty::SharedPtr msg);
-  void save_raw_image_(Arena::IImage* pImage);
+  void log_debug(const std::string& msg)
+  {
+    RCLCPP_DEBUG(this->get_logger(), "%s", msg.c_str());
+  }
+
+  void log_info(const std::string& msg)
+  {
+    RCLCPP_INFO(this->get_logger(), "%s", msg.c_str());
+  }
+
+  void log_warn(const std::string& msg)
+  {
+    RCLCPP_WARN(this->get_logger(), "%s", msg.c_str());
+  }
+
+  void log_err(const std::string& msg)
+  {
+    RCLCPP_ERROR(this->get_logger(), "%s", msg.c_str());
+  }
 
  private:
+  // Arena SDK
   std::shared_ptr<Arena::ISystem> m_pSystem;
   std::shared_ptr<Arena::IDevice> m_pDevice;
 
+  // ROS publishers/subscribers/timers
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr m_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr heartbeat_pub_;
-  rclcpp::TimerBase::SharedPtr m_wait_for_device_timer_callback_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr m_trigger_an_image_srv_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr camera_diag_pub_;
 
-  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr save_trigger_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr record_mode_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr session_path_sub_;
 
-  std::atomic<bool> save_next_raw_{false};
+  rclcpp::TimerBase::SharedPtr m_wait_for_device_timer_callback_;
+
+  // Raw recording state
+  std::atomic<bool> record_raw_{false};
   std::string raw_save_root_;
   std::filesystem::path raw_save_dir_;
-  std::filesystem::path make_raw_save_dir_();
 
+  // Camera selection
   std::string serial_;
-  bool is_passed_serial_;
+  bool is_passed_serial_{false};
 
+  // Publishing
   std::string topic_;
 
-  size_t width_;
-  bool is_passed_width;
+  // ROI
+  size_t width_{0};
+  bool is_passed_width{false};
 
-  size_t height_;
-  bool is_passed_height;
+  size_t height_{0};
+  bool is_passed_height{false};
 
-  double gain_;
-  bool is_passed_gain_;
+  // Gain/exposure parameters
+  double gain_{-1.0};
+  bool is_passed_gain_{false};
 
   std::string gain_auto_;
-  bool is_passed_gain_auto_;
+  bool is_passed_gain_auto_{false};
 
-  double exposure_time_;
-  bool is_passed_exposure_time_;
+  double exposure_time_{-1.0};
+  bool is_passed_exposure_time_{false};
 
   std::string exposure_auto_;
-  bool is_passed_exposure_auto_;
+  bool is_passed_exposure_auto_{false};
 
+  // Pixel format
   std::string pixelformat_pfnc_;
   std::string pixelformat_ros_;
-  bool is_passed_pixelformat_ros_;
+  bool is_passed_pixelformat_ros_{false};
 
-  bool trigger_mode_activated_;
+  // Trigger/acquisition mode
+  bool hardware_trigger_{false};
 
+  // QoS
   std::string pub_qos_history_;
-  bool is_passed_pub_qos_history_;
+  bool is_passed_pub_qos_history_{false};
 
-  size_t pub_qos_history_depth_;
-  bool is_passed_pub_qos_history_depth_;
+  size_t pub_qos_history_depth_{0};
+  bool is_passed_pub_qos_history_depth_{false};
 
   std::string pub_qos_reliability_;
-  bool is_passed_pub_qos_reliability_;
+  bool is_passed_pub_qos_reliability_{false};
 
+  // Runtime parameter / diagnostics support
+  std::mutex camera_param_mutex_;
+
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
+
+  // Setup
   void parse_parameters_();
   void initialize_();
-
   void wait_for_device_timer_callback_();
-
   void run_();
-  // TODO :
-  // - handle misconfigured device
+
+  // Device creation/configuration
   Arena::IDevice* create_device_ros_();
+
   void set_nodes_();
   void set_nodes_load_default_profile_();
   void set_nodes_roi_();
   void set_nodes_gain_();
   void set_nodes_pixelformat_();
   void set_nodes_exposure_();
+  void set_nodes_auto_exposure_gain_();
   void set_nodes_trigger_mode_();
   void set_nodes_test_pattern_image_();
+
+  // Main acquisition pipeline
   void publish_images_();
 
-  void publish_an_image_on_trigger_(
-      std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-      std::shared_ptr<std_srvs::srv::Trigger::Response> response);
-  void msg_form_image_(Arena::IImage* pImage,
-                       sensor_msgs::msg::Image& image_msg);
+  // Raw recording
+  void record_mode_callback_(const std_msgs::msg::String::SharedPtr msg);
+  void save_raw_image_(Arena::IImage* pImage);
+  std::filesystem::path make_raw_save_dir_();
 
-  // Expose Parameters and Diagnostics
-    std::mutex camera_param_mutex_;
+  // Timestamp helpers
+  builtin_interfaces::msg::Time timestamp_from_image_(Arena::IImage* pImage) const;
+  std::string timestamp_filename_stem_(Arena::IImage* pImage) const;
 
-  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
-
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr camera_diag_pub_;
-
+  // Diagnostics / parameters
   rcl_interfaces::msg::SetParametersResult on_set_parameters_(
       const std::vector<rclcpp::Parameter>& params);
 

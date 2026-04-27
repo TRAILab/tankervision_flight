@@ -21,13 +21,13 @@ storage:
 trigger:
   topic: /save_images_trigger
   timeout_sec: 20
-  cooldown_sec: 5
+  cooldown_sec: 3
 
 lucid_camera:
   topic: /cam0/image_raw
   width: 5320
   height: 4600
-  exposure_time: 1000.0
+  hardware_trigger: true
   pixelformat: bayer_rggb16
   qos_reliability: reliable
 
