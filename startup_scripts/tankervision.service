@@ -12,6 +12,7 @@ ExecStartPre=/usr/local/bin/configure-dfg-camera.sh /home/FLIGHT_USER/tankervisi
 ExecStart=/bin/bash -c 'source /opt/ros/humble/setup.bash && source /home/FLIGHT_USER/tankervision_flight/install/setup.bash && ros2 launch tanker_vision flight.launch.py'
 Restart=on-failure
 RestartSec=10
+TimeoutStopSec=15
 
 [Install]
 WantedBy=multi-user.target

@@ -1,10 +1,10 @@
 # tankervision.yaml — Global configuration for TankerVision flight computer.
 # Change 'mode' before each flight.
 
-mode: testing
+mode: flight
 
 unit:
-  name: helios
+  name: atlas
   plane_number: BD-124
   province: Alberta
 
