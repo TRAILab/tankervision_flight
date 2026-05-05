@@ -3,7 +3,9 @@
     "allow": [
       "Bash(git push *)",
       "Bash(git branch *)",
-      "Bash(git remote *)"
+      "Bash(git remote *)",
+      "Bash(find /home/trailab/Documents/repos/tankervision_flight -name \"mnt-storage.mount\" 2>/dev/null; cat /etc/systemd/system/mnt-storage.mount 2>/dev/null || echo \"not on this machine\")",
+      "Read(//etc/systemd/system/**)"
     ]
   }
 }
