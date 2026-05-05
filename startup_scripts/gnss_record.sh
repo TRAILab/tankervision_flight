@@ -14,7 +14,7 @@ while [[ ! -f /tmp/tankervision_session_path ]]; do
 done
 SESSION_DIR=$(cat /tmp/tankervision_session_path)
 
-OUTPUT_DIR="$SESSION_DIR/gnss"
+OUTPUT_DIR="$SESSION_DIR"
 mkdir -p "$OUTPUT_DIR"
 
 stty -F /dev/gnss_raw 921600 raw -echo -ixon -ixoff -icrnl -inlcr -opost

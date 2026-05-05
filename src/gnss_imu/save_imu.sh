@@ -17,14 +17,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$OUTPUT_DIR" ]]; then
-  echo "[ERROR] --output is required. e.g. bash save_imu.sh --output /mnt/storage/seq_01"
-  exit 1
+  echo "[INFO] No --output given, waiting for /tmp/tankervision_session_path ..."
+  while [[ ! -f /tmp/tankervision_session_path ]]; do sleep 1; done
+  OUTPUT_DIR=$(cat /tmp/tankervision_session_path)
+  echo "[INFO] Using session path: $OUTPUT_DIR"
 fi
 
 # ── Setup ────────────────────────────────────────────────────────
 source /opt/ros/humble/setup.bash
 
-BAG_PATH="$OUTPUT_DIR/imu_$(date +%Y%m%d_%H%M%S)"
+BAG_PATH="$OUTPUT_DIR/imu"
 mkdir -p "$OUTPUT_DIR"
 
 # ── Configure IM19 via AT commands ───────────────────────────────

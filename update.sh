@@ -164,20 +164,6 @@ for SVC in ptp4l.service tankervision.service gnss-record.service; do
         echo -e "  ${YELLOW}○${NC} $SVC ($STATUS)"
     fi
 done
-
-# Check ROS nodes running inside tankervision.service
 echo ""
-info "ROS nodes (via ros2 node list):"
-set +u
-source /opt/ros/humble/setup.bash 2>/dev/null || true
-source "$REPO_DIR/install/setup.bash" 2>/dev/null || true
-set -u
-NODES=$(ros2 node list 2>/dev/null || echo "")
-for NODE in arena_camera_node analog_camera status_node im19_mems_node; do
-    if echo "$NODES" | grep -q "/$NODE"; then
-        echo -e "  ${GREEN}●${NC} $NODE"
-    else
-        echo -e "  ${YELLOW}○${NC} $NODE (not running)"
-    fi
-done
+info "ROS nodes still starting — check with: ros2 node list"
 echo ""

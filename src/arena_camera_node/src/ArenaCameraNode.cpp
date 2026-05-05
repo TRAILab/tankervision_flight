@@ -180,10 +180,9 @@ void ArenaCameraNode::initialize_()
             &ArenaCameraNode::session_path_callback_, this, std::placeholders::_1));
   }
 
-  raw_save_dir_ = make_raw_save_dir_();
   log_info(
       "Subscribed to /camera/record_mode. Send 'record' to save raw images, "
-      "'standby' to stop saving raw images.");
+      "'standby' to stop saving raw images. Waiting for /tankervision/session_path.");
 
   declare_tunable_parameters_();
   apply_initial_tunable_parameters_();
@@ -393,6 +392,10 @@ void ArenaCameraNode::save_raw_image_(Arena::IImage* pImage)
 {
   if (!pImage) {
     log_warn("save_raw_image_: pImage is null");
+    return;
+  }
+  if (raw_save_dir_.empty()) {
+    log_warn("save_raw_image_: session path not yet received, skipping");
     return;
   }
 
