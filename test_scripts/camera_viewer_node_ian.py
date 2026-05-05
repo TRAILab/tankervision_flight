@@ -61,7 +61,7 @@ _LATCHED_QOS = QoSProfile(
 _BEST_EFFORT_QOS = QoSProfile(
     reliability=ReliabilityPolicy.BEST_EFFORT,
     history=HistoryPolicy.KEEP_LAST,
-    depth=10
+    depth=1
 )
 _TRIGGER_QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
@@ -275,10 +275,12 @@ class CameraViewerNode(Node):
         if not self._show_lucid and not self._show_analog:
             raise RuntimeError("At least one of 'show_lucid' or 'show_analog' must be True")
 
-        self._lock         = threading.Lock()
-        self._frame_lucid  = None
-        self._frame_analog = None
-        self._lucid_diag   = {}
+        self._lock           = threading.Lock()
+        self._frame_lucid    = None
+        self._frame_analog   = None
+        self._lucid_diag     = {}
+        self._lucid_skip     = 0
+        self._analog_skip    = 0
 
         # Session path from status_node — update save_dir when received
         self.create_subscription(
@@ -305,6 +307,9 @@ class CameraViewerNode(Node):
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
     def _lucid_cb(self, msg: Image):
+        self._lucid_skip = (self._lucid_skip + 1) % 3
+        if self._lucid_skip != 0:
+            return
         try:
             frame = imgmsg_to_bgr(msg)
         except Exception as e:
@@ -314,6 +319,9 @@ class CameraViewerNode(Node):
             self._frame_lucid = frame
 
     def _analog_cb(self, msg: Image):
+        self._analog_skip = (self._analog_skip + 1) % 3
+        if self._analog_skip != 0:
+            return
         try:
             frame = imgmsg_to_bgr(msg)
         except Exception as e:
@@ -458,7 +466,7 @@ def main(args=None):
                 frame = _label(frame, 'Analog')
                 cv2.imshow('Analog Camera', frame)
 
-            key = cv2.waitKey(30) & 0xFF
+            key = cv2.waitKey(100) & 0xFF
 
             if key == ord('s'):
                 node.handle_save_action(lucid, analog)

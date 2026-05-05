@@ -194,7 +194,9 @@ class StatusNode(Node):
         self._session_path      = None
         self._flight_log_fh     = None
         self._maxvis_ever_active = False
-        self._fire_trigger_count = 0
+        self._maxvis_last_check  = 0.0
+        self._maxvis_device      = self._cfg.get('analog_camera', {}).get('device', '/dev/video0')
+        self._record_count = 0
 
         # ─── State handlers ──────────────────────────────────────────────
         self.imu       = StateHandler('IMU',       'IMU_OK',              'IMU_NO_HEARTBEAT')
@@ -209,7 +211,7 @@ class StatusNode(Node):
         self.create_subscription(Imu,    '/im19/imu',            self._imu_heartbeat_cb,       10)
         self.create_subscription(String, 'camera_heartbeat',     self._camera_heartbeat_cb,    10)
         self.create_subscription(String, 'record_data/status',   self._recording_heartbeat_cb, 10)
-        self.create_subscription(Empty,  '/save_images_trigger', self._trigger_cb,             10)
+        self.create_subscription(String, '/camera/record_mode',  self._record_mode_cb,         10)
         self.create_subscription(Log,    '/rosout',              self._rosout_cb,              100)
         # MaxVis: best-effort, depth=1 — only used to detect if analog signal is present
         self.create_subscription(Image, '/cam1/image_raw', self._maxvis_cb, _BEST_EFFORT_QOS)
@@ -331,13 +333,28 @@ class StatusNode(Node):
             self._flight_log_fh.stream.flush()
 
     def _maxvis_cb(self, _msg: Image):
-        if not self._maxvis_ever_active:
-            self._maxvis_ever_active = True
-            _py_logger.info('MaxVis analog signal detected')
+        if self._maxvis_ever_active:
+            return
+        import time
+        now = time.monotonic()
+        if now - self._maxvis_last_check < 1.0:
+            return
+        self._maxvis_last_check = now
+        try:
+            out = subprocess.check_output(
+                ['v4l2-ctl', f'--device={self._maxvis_device}', '--get-input'],
+                stderr=subprocess.DEVNULL, timeout=2,
+            ).decode()
+            if 'no signal' not in out.lower():
+                self._maxvis_ever_active = True
+                _py_logger.info('MaxVis analog signal detected')
+        except Exception:
+            pass
 
-    def _trigger_cb(self, _msg):
-        self._fire_trigger_count += 1
-        _py_logger.info(f'Fire trigger #{self._fire_trigger_count}: /save_images_trigger')
+    def _record_mode_cb(self, msg: String):
+        if msg.data.strip().lower() == 'record':
+            self._record_count += 1
+            _py_logger.info(f'Recording started #{self._record_count}')
 
     # ─── Internet & time sync ─────────────────────────────────────────────────
     def _check_internet(self):
@@ -356,12 +373,12 @@ class StatusNode(Node):
             if connected and self.send_landing_email:
                 self.send_landing_email = False
                 self._executor.submit(self._send_landing_email_bg)
-            elif connected and self.send_startup_email:
+            elif connected and self.send_startup_email and self._session_path:
                 self.send_startup_email = False
                 body = (
                     f'TankerVision is online.\n'
                     f'Unit: {name} | Plane: {plane} | Mode: {self._mode}\n'
-                    f'Session: {self._session_path or "pending"}'
+                    f'Session: {self._session_path}'
                 )
                 self._executor.submit(self._send_email, self._email_subject('Online'), body)
 
@@ -456,7 +473,7 @@ class StatusNode(Node):
             f'=== SESSION SUMMARY ===\n'
             f'Session folder : {self._session_path}\n'
             f'Raw images saved: {raw_count}\n'
-            f'Fire triggers   : {self._fire_trigger_count}\n'
+            f'Recordings      : {self._record_count}\n'
             f'MaxVis active   : {maxvis_str}\n\n'
             f'=== NODE LOGS ===\n{logs}\n\n'
             f'=== STORAGE USAGE ===\n{du_output}'
