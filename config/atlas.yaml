@@ -1,0 +1,10 @@
+# tankervision.yaml — Unique Configuration for Each Flight Computer.
+# Change 'mode' before each flight.
+
+mode: flight
+
+unit:
+  name: atlas
+  plane_number: BD-124
+  city: Whitecourt
+  province: Alberta

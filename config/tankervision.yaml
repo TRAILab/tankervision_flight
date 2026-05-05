@@ -1,12 +1,4 @@
-# tankervision.yaml — Global configuration for TankerVision flight computer.
-# Change 'mode' before each flight.
 
-mode: flight
-
-unit:
-  name: atlas
-  plane_number: BD-124
-  province: Alberta
 
 notifications:
   email_to: wildfire@robotics.utias.utoronto.ca

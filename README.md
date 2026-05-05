@@ -14,12 +14,12 @@ and saves raw imagery and rosbags to a local mergerfs storage pool.
 
 | Unit   | Plane   | Province        |
 |--------|---------|-----------------|
-| helios | BD-122  | (set in YAML)   |
-| argus  | BD-122  | (set in YAML)   |
+| helios | BD-124  | Alberta         |
+| argus  | BD-122  | British Columbia|
 | atlas  | BD-126  | Alberta         |
 
-Unit identity is set per-machine in `config/tankervision.yaml`.
-
+Unit identity is set per-machine in `config/<unit name>.yaml`.
+Global Config (true for all flight units) is set in `config/tankervision.yaml`.
 ---
 
 ## Repository Layout
@@ -28,6 +28,9 @@ Unit identity is set per-machine in `config/tankervision.yaml`.
 tankervision_flight/
 ├── config/
 │   └── tankervision.yaml          ← single config file for everything
+│   └──  argus.yaml                ← unit-specific config - only one is read by the unit
+│   └──  atlas.yaml
+│   └──  helios.yaml   
 ├── scripts/
 │   ├── configure-dfg-camera.sh    ← applies NTSC/PAL settings to DFG2USB Pro
 │   └── tankervision_login.sh      ← shows flight log on terminal login
@@ -56,18 +59,24 @@ tankervision_flight/
 
 ---
 
-## Configuration — `config/tankervision.yaml`
+## Configuration — `config/tankervision.yaml` and `config/<unit_name>.yaml`
 
 This is the **single source of truth** for all system parameters.
 Edit this file to change mode, camera settings, YOLO thresholds, etc.
 
+
 ```yaml
-mode: testing        # testing | flight  ← CHANGE THIS BEFORE FLIGHT
+mode: flight        # testing | flight  ← CHANGE THIS BEFORE FLIGHT
 
 unit:
-  name: atlas
+  name: atlas       # eg
   plane_number: BD-126
   province: Alberta
+
+```
+
+```yaml
+
 
 notifications:
   email_to: wildfire@robotics.utias.utoronto.ca

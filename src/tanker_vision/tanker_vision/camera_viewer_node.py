@@ -8,7 +8,16 @@ import numpy as np
 import rclpy
 from cv_bridge import CvBridge, CvBridgeError
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
+from std_msgs.msg import String
+
+_LATCHED_QOS = QoSProfile(
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    reliability=ReliabilityPolicy.RELIABLE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+)
 
 _DISPLAY_HEIGHT = 540  # both panels are scaled to this height for display
 
@@ -35,6 +44,10 @@ class CameraViewerNode(Node):
 
         os.makedirs(self._save_dir, exist_ok=True)
 
+        # Update save_dir to session_folder/saved_frames when session path is published
+        self.create_subscription(
+            String, '/tankervision/session_path', self._session_path_cb, _LATCHED_QOS)
+
         if self._show_lucid:
             self.create_subscription(Image, '/cam0/image_raw', self._lucid_cb,  10)
             self.get_logger().info('Subscribed to /cam0/image_raw  (Lucid)')
@@ -44,6 +57,14 @@ class CameraViewerNode(Node):
             self.get_logger().info('Subscribed to /cam1/image_raw  (Analog)')
 
         self.get_logger().info("Press 's' to save frames, 'q' or ESC to quit")
+
+    # ── Session path ─────────────────────────────────────────────────────────
+
+    def _session_path_cb(self, msg: String):
+        new_dir = os.path.join(msg.data, 'saved_frames')
+        os.makedirs(new_dir, exist_ok=True)
+        self._save_dir = new_dir
+        self.get_logger().info(f'Saving frames to {new_dir}')
 
     # ── Subscription callbacks ────────────────────────────────────────────────
 

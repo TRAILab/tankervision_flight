@@ -1,0 +1,10 @@
+# tankervision.yaml — Unique Configuration for Each Flight Computer.
+# Change 'mode' before each flight.
+
+mode: flight
+
+unit:
+  name: helios
+  plane_number: BD-126
+  city: TBD
+  province: Alberta
