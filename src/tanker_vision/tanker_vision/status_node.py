@@ -278,6 +278,13 @@ class StatusNode(Node):
 
         _py_logger.info(f'=== SESSION STARTED: {session_path} ===')
 
+        # Write session path to a well-known file so non-ROS scripts (gnss, imu) can find it
+        try:
+            with open('/tmp/tankervision_session_path', 'w') as f:
+                f.write(session_path)
+        except Exception as e:
+            _py_logger.warning(f'Could not write session path file: {e}')
+
         # Latched publish — late-starting nodes will still receive this
         msg = String()
         msg.data = session_path

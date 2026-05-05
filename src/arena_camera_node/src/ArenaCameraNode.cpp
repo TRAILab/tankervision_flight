@@ -170,6 +170,16 @@ void ArenaCameraNode::initialize_()
       std::bind(
           &ArenaCameraNode::record_mode_callback_, this, std::placeholders::_1));
 
+  {
+    auto qos = rclcpp::QoS(1)
+        .reliability(rclcpp::ReliabilityPolicy::Reliable)
+        .durability(rclcpp::DurabilityPolicy::TransientLocal);
+    session_path_sub_ = this->create_subscription<std_msgs::msg::String>(
+        "/tankervision/session_path", qos,
+        std::bind(
+            &ArenaCameraNode::session_path_callback_, this, std::placeholders::_1));
+  }
+
   raw_save_dir_ = make_raw_save_dir_();
   log_info(
       "Subscribed to /camera/record_mode. Send 'record' to save raw images, "
@@ -261,6 +271,20 @@ void ArenaCameraNode::record_mode_callback_(const std_msgs::msg::String::SharedP
     log_warn(
         "Unknown /camera/record_mode value: '" + mode + "'. Expected 'record' or 'standby'.");
   }
+}
+
+void ArenaCameraNode::session_path_callback_(const std_msgs::msg::String::SharedPtr msg)
+{
+  if (!msg || msg->data.empty()) return;
+  std::filesystem::path new_dir = std::filesystem::path(msg->data);
+  std::error_code ec;
+  std::filesystem::create_directories(new_dir, ec);
+  if (ec) {
+    log_warn("session_path_callback_: could not create directory: " + new_dir.string());
+    return;
+  }
+  raw_save_dir_ = new_dir;
+  log_info("Raw save directory updated to session path: " + new_dir.string());
 }
 
 rcl_interfaces::msg::SetParametersResult ArenaCameraNode::on_set_parameters_(
@@ -651,7 +675,7 @@ void ArenaCameraNode::set_nodes_()
             std::string(currPtpStatus) + "). Continuing without PTP sync.");
         break;
       }
-      log_warn("NOT IN SLAVE MODE: " + std::string(currPtpStatus));
+      log_info("PTP not yet in slave mode: " + std::string(currPtpStatus));
       std::this_thread::sleep_for(ptp_poll_interval);
       currPtpStatus = Arena::GetNodeValue<GenICam::gcstring>(nodemap, "PtpStatus");
     }

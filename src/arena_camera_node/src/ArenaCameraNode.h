@@ -159,6 +159,7 @@ class ArenaCameraNode : public rclcpp::Node
 
   // Raw recording
   void record_mode_callback_(const std_msgs::msg::String::SharedPtr msg);
+  void session_path_callback_(const std_msgs::msg::String::SharedPtr msg);
   void save_raw_image_(Arena::IImage* pImage);
   std::filesystem::path make_raw_save_dir_();
 

@@ -9,7 +9,12 @@ while [[ $(date +%Y) -lt 2020 ]]; do
     sleep 1
 done
 
-OUTPUT_DIR=/mnt/storage/$(date +%Y-%m-%d)/gnss_$(date +%H-%M-%S)
+while [[ ! -f /tmp/tankervision_session_path ]]; do
+    sleep 1
+done
+SESSION_DIR=$(cat /tmp/tankervision_session_path)
+
+OUTPUT_DIR="$SESSION_DIR/gnss"
 mkdir -p "$OUTPUT_DIR"
 
 stty -F /dev/gnss_raw 921600 raw -echo -ixon -ixoff -icrnl -inlcr -opost
@@ -22,4 +27,3 @@ while true; do
     OUTFILE="$OUTPUT_DIR/gnss_$(date +%Y%m%d_%H%M%S).ubx"
     timeout 1800 cat /dev/gnss_raw > "$OUTFILE" || true
 done
-ß
