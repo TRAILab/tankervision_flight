@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Top-level launch file for TankerVision.
-Loads config/tankervision.yaml (global) + config/<hostname>.yaml (unit-specific).
+Loads config/tankervision.yaml (global) + config/<unit>.yaml (unit-specific).
+Unit config is found by matching username then hostname against config/<name>.yaml.
 Unit config overrides global for any overlapping keys.
 """
 import os
@@ -24,11 +25,14 @@ _VIDEO_STANDARDS = {
 
 
 def _get_unit_cfg_path() -> str:
-    hostname = socket.gethostname().lower()
-    path = os.path.join(_CFG_DIR, f'{hostname}.yaml')
-    if os.path.exists(path):
-        return path
-    print(f'[flight.launch] WARNING: No unit config found for hostname "{hostname}"')
+    for candidate in (os.environ.get('USER', '').lower(), socket.gethostname().lower()):
+        if not candidate:
+            continue
+        path = os.path.join(_CFG_DIR, f'{candidate}.yaml')
+        if os.path.exists(path):
+            print(f'[flight.launch] Unit config: {path} (matched "{candidate}")')
+            return path
+    print(f'[flight.launch] WARNING: No unit config found for hostname "{socket.gethostname()}" or user "{os.environ.get("USER", "")}"')
     return ''
 
 
