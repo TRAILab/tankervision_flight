@@ -2,8 +2,6 @@
 import os
 import time
 import struct
-from pathlib import Path
-
 import serial
 import rclpy
 from rclpy.node import Node
@@ -107,7 +105,6 @@ class IM19MemsNode(Node):
         self.declare_parameter("baud",                  115200)
         self.declare_parameter("timeout",               0.05)
         self.declare_parameter("frame_id",              "im19")
-        self.declare_parameter("output_dir",            str(Path.home() / "im19_logs"))
         self.declare_parameter("chunk_size",            1024)
         self.declare_parameter("stats_period_sec",      300.0)
         self.declare_parameter("flush_period_sec",      5.0)
@@ -125,9 +122,9 @@ class IM19MemsNode(Node):
         self.reconnect_period_sec = float(self.get_parameter("reconnect_period_sec").value)
         self.send_startup_commands = bool(self.get_parameter("send_startup_commands").value)
         self.startup_commands     = list(self.get_parameter("startup_commands").value)
-        self._output_dir_base     = self.get_parameter("output_dir").value
 
-        self.output_dir      = self._output_dir_base
+        self._current_session = None
+        self.output_dir      = None
         self.mems_file       = None
         self.navi_file       = None
         self.ser             = None
@@ -141,54 +138,48 @@ class IM19MemsNode(Node):
         self.raw_pub = self.create_publisher(Float64MultiArray, "/im19/rawdata", 50)
 
         self.create_timer(0.001,                   self.read_serial_once)
+        self.create_timer(2.0,                     self._check_session)
         self.create_timer(self.stats_period_sec,   self.print_stats)
         self.create_timer(self.flush_period_sec,   self.flush_files)
 
         self.try_open_serial(initial=True)
 
-    # ── Session directory ─────────────────────────────────────────────────────
-    def _make_session_dir(self) -> bool:
-        """Create dated session directory. Returns False if clock not yet synced."""
-        if time.localtime().tm_year < 2020:
-            return False
-        now = time.localtime()
-        self.output_dir = os.path.join(
-            self._output_dir_base,
-            time.strftime("%Y-%m-%d", now),
-            time.strftime("imu_%H-%M-%S", now),
-        )
+    # ── Session ───────────────────────────────────────────────────────────────
+    def _check_session(self):
+        try:
+            with open('/tmp/tankervision_session_path') as f:
+                new_session = f.read().strip()
+        except Exception:
+            return
+        if not new_session or new_session == self._current_session:
+            return
+        self._current_session = new_session
+        self.output_dir = new_session
         os.makedirs(self.output_dir, exist_ok=True)
-        return True
+        for f in (self.mems_file, self.navi_file):
+            try:
+                if f is not None:
+                    f.flush(); f.close()
+            except Exception:
+                pass
+        self.mems_file = None
+        self.navi_file = None
 
     def _ensure_mems_file(self):
-        """Open MEMS binary file if not already open. No-op if clock not synced."""
         if self.mems_file is not None:
             return
-        if self.output_dir == self._output_dir_base:
-            if not self._make_session_dir():
-                # Clock not synced yet — skip silently, will retry next packet
-                return
-        path = os.path.join(
-            self.output_dir,
-            f"im19_mems_raw_{time.strftime('%Y%m%d_%H%M%S')}.bin"
-        )
+        if self.output_dir is None:
+            return
+        path = os.path.join(self.output_dir, f"im19_mems_raw_{time.strftime('%Y%m%d_%H%M%S')}.bin")
         self.mems_file = open(path, "ab")
-        self.get_logger().info(f"MEMS output: {path}")
 
     def _ensure_navi_file(self):
-        """Open NAVI binary file if not already open. No-op if clock not synced."""
         if self.navi_file is not None:
             return
-        if self.output_dir == self._output_dir_base:
-            if not self._make_session_dir():
-                # Clock not synced yet — skip silently, will retry next packet
-                return
-        path = os.path.join(
-            self.output_dir,
-            f"im19_navi_raw_{time.strftime('%Y%m%d_%H%M%S')}.bin"
-        )
+        if self.output_dir is None:
+            return
+        path = os.path.join(self.output_dir, f"im19_navi_raw_{time.strftime('%Y%m%d_%H%M%S')}.bin")
         self.navi_file = open(path, "ab")
-        self.get_logger().info(f"NAVI output: {path}")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
     def destroy_node(self):
