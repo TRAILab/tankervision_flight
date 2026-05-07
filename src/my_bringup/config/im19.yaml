@@ -14,6 +14,13 @@ im19_mems_node:
     send_startup_commands: true
     startup_commands:
       - "AT+MEMS_OUTPUT=UART1,ON"
+      - "AT+NAVI_OUTPUT=UART1,ON"
+      - "AT+NASC_OUTPUT=UART1,OFF"
+      - "AT+AHRS=ENABLE"
+      - "AT+INSTALL_ANGLE=180,0,90"
+      - "AT+WORK_MODE=13"
+      - "AT+LEVER_ARM2=0.10195,0.00,0.03"
+
 
     rotate_every_mb: 200
     rotate_every_sec: 1800
