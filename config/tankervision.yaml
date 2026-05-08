@@ -7,6 +7,11 @@ notifications:
   gmail_user: wildfire@robotics.utias.utoronto.ca
   gmail_app_password: aqszpdqdypwqrkre
   
+# set manage to true to turn on/off with takeoff landing
+# TO-DO: confirm implementation when cellular is on. use nmcli device status
+cellular: 
+  manage: false 
+  interface: wwan0
 
 storage:
   root: /mnt/storage

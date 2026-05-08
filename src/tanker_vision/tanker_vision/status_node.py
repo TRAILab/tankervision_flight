@@ -8,6 +8,7 @@ import yaml
 import subprocess
 import threading
 import logging
+import time
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -434,7 +435,6 @@ class StatusNode(Node):
 
     # ─── Restart Camera on PPS ────────────────────────────────────────────────
     def _restart_arena_with_hardware_trigger(self):
-        import time
         _py_logger.info('PPS acquired — restarting arena_camera_node with hardware trigger')
         try:
             # Kill only the arena_camera_node executable (--exact avoids matching
@@ -500,6 +500,29 @@ class StatusNode(Node):
         except Exception as e:
             _py_logger.error(f'Failed to restart arena_camera_node: {e}')
 
+    # ─── Cellular Status ─────────────────────────────────────────────────────
+    def _cellular_off(self):
+        """Turn off cellular on takeoff. Stub — not tested."""
+        iface = self._cfg.get('cellular', {}).get('interface', 'wwan0')
+        if not self._cfg.get('cellular', {}).get('manage', False):
+            return
+        try:
+            subprocess.run(['nmcli', 'radio', 'wwan', 'off'], check=False, timeout=5)
+            _py_logger.info(f'Cellular off: nmcli radio wwan off')
+        except Exception as e:
+            _py_logger.error(f'Failed to turn cellular off: {e}')
+
+    def _cellular_on(self):
+        """Turn on cellular on landing. Stub — not tested."""
+        iface = self._cfg.get('cellular', {}).get('interface', 'wwan0')
+        if not self._cfg.get('cellular', {}).get('manage', False):
+            return
+        try:
+            subprocess.run(['nmcli', 'radio', 'wwan', 'on'], check=False, timeout=5)
+            _py_logger.info(f'Cellular on: nmcli radio wwan on')
+        except Exception as e:
+            _py_logger.error(f'Failed to turn cellular on: {e}')
+
     # ─── Flight detection ─────────────────────────────────────────────────────
     def _takeoff_procedure(self, mag: float):
         name  = self._unit.get('name', 'unit')
@@ -525,6 +548,8 @@ class StatusNode(Node):
             f'=== STORAGE USAGE ===\n{du_output}'
         )
         self._send_email(self._email_subject('Takeoff'), body)
+        time.sleep(5)
+        self._executor.submit(self._cellular_off)
 
     def velocity_callback(self, msg):
         self.velocity_msg_count += 1
@@ -540,6 +565,7 @@ class StatusNode(Node):
             self.is_in_air = False
             _py_logger.info(f'Landing detected: {mag:.2f} m/s')
             self.send_landing_email = True
+            self._executor.submit(self._cellular_on)
 
     # ─── Email helpers ────────────────────────────────────────────────────────
     def _email_subject(self, event: str) -> str:
