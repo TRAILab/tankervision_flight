@@ -140,7 +140,6 @@ restart_svc chrony
 restart_svc gpsd.service
 restart_svc ptp4l.service
 restart_svc gpsd-chrony.service
-restart_svc gnss-record.service
 
 # ── 5. Rebuild ROS2 workspace ─────────────────────────────────────
 info "Building ROS2 workspace..."
@@ -152,6 +151,7 @@ colcon build --symlink-install --packages-skip xsens_mti_ros2_driver
 
 # ── 5b. Restart tankervision after build ──────────────────────────
 restart_svc tankervision.service
+restart_svc gnss-record.service
 
 # ── 6. Summary ────────────────────────────────────────────────────
 echo ""
