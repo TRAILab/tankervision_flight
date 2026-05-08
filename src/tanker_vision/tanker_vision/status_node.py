@@ -199,9 +199,12 @@ class StatusNode(Node):
         self._record_count = 0
 
         # Hardware trigger mode from config
+        self._pps_trigger_lock = threading.Lock()
+        self._pps_trigger_done = False
         _ht = self._cfg.get('lucid_camera', {}).get('hardware_trigger', False)
         self._hw_trigger_mode = str(_ht).lower()   # 'false' | 'true' | 'on_pps'
-        self._pps_trigger_done = False
+        if self._hw_trigger_mode == 'on_pps':
+            _py_logger.info('hardware_trigger=on_pps: camera will restart with hardware trigger on first PPS lock')
 
         # ─── State handlers ──────────────────────────────────────────────
         self.imu       = StateHandler('IMU',       'IMU_OK',              'IMU_NO_HEARTBEAT')
@@ -223,6 +226,13 @@ class StatusNode(Node):
         # TODO: subscribe to velocity topic once GNSS velocity source is available
         # (xsens /filter/velocity is gone; IM19 does not publish a fused velocity)
 
+        #create temp subscription to test hardware restart. 
+        self.create_subscription(
+            Empty,
+            '/debug/force_hw_trigger_restart',
+            self._debug_force_hw_trigger,
+            1
+        )
         # ─── Timers ──────────────────────────────────────────────────────
         self.create_timer(1.25, self._check_camera_heartbeat)
         self.create_timer(1.0,  self._check_imu_heartbeat)
@@ -238,6 +248,15 @@ class StatusNode(Node):
             f'StatusNode started | unit={self._unit.get("name", "?")} '
             f'plane={self._unit.get("plane_number", "?")} mode={self._mode}'
         )
+
+
+    def _debug_force_hw_trigger(self, msg):
+        with self._pps_trigger_lock:
+            if self._pps_trigger_done:
+                _py_logger.info('debug trigger received but restart already done — skipping')
+                return
+            self._pps_trigger_done = True
+        threading.Thread(target=self._restart_arena_with_hardware_trigger, daemon=True).start()
 
     # ─── Session folder ───────────────────────────────────────────────────────
     def _try_create_session(self):
@@ -403,40 +422,81 @@ class StatusNode(Node):
         if state != self.time_sync_state:
             self.time_sync_state = state
             _py_logger.info(f'Time sync: {state}')
-            if pps_ok and self._hw_trigger_mode == 'on_pps' and not self._pps_trigger_done:
-                self._pps_trigger_done = True
-                threading.Thread(target=self._restart_arena_with_hardware_trigger, daemon=True).start()
+            if pps_ok and self._hw_trigger_mode == 'on_pps':
+                with self._pps_trigger_lock:
+                    if not self._pps_trigger_done:
+                        self._pps_trigger_done = True
+                        _py_logger.info(f'hw_trigger_done flag set, firing restart')
+                        threading.Thread(target=self._restart_arena_with_hardware_trigger, daemon=True).start()
+                    else:
+                        _py_logger.info(f'PPS still acquired, restart already done — skipping')
 
 
     # ─── Restart Camera on PPS ────────────────────────────────────────────────
     def _restart_arena_with_hardware_trigger(self):
+        import time
         _py_logger.info('PPS acquired — restarting arena_camera_node with hardware trigger')
         try:
+            # Kill only the arena_camera_node executable (--exact avoids matching
+            # unrelated ros2 CLI commands that mention the node name)
             subprocess.run(
-                ['pkill', '-f', 'arena_camera_node'],
-                check=False, timeout=5
+                ['pkill', '-f', 'arena_camera_node/lib/arena_camera_node/start'],
+                check=False, timeout=5,
             )
-            import time; time.sleep(2)  # let node die cleanly
+            for _ in range(20):
+                result = subprocess.run(
+                    ['pgrep', '-f', 'arena_camera_node/lib/arena_camera_node/start'],
+                    capture_output=True
+                )
+                if result.returncode != 0:
+                    break  # process is gone
+                time.sleep(0.5)
+            else:
+                _py_logger.error('arena_camera_node did not die after 10s — aborting restart')
+                return
+
+            time.sleep(1) 
+
+            # Build env: start from the service environment (HOME, USER already set
+            # by systemd), then explicitly carry any ROS vars that may be needed
             env = os.environ.copy()
             env['PYTHONUNBUFFERED'] = '1'
-            subprocess.Popen(
-                [
-                    'bash', '-c',
-                    'source /opt/ros/humble/setup.bash && '
-                    f'source {os.path.expanduser("~")}/tankervision_flight/install/setup.bash && '
-                    'ros2 run arena_camera_node start '
-                    '--ros-args '
-                    '-r /arena_camera_node/images:=/cam0/image_raw '
-                    '-p hardware_trigger:=true '
-                    f'-p width:={self._cfg.get("lucid_camera", {}).get("width", 5320)} '
-                    f'-p height:={self._cfg.get("lucid_camera", {}).get("height", 4600)} '
-                    f'-p pixelformat:={self._cfg.get("lucid_camera", {}).get("pixelformat", "bayer_rggb16")} '
-                    f'-p config:={self.get_parameter("config").get_parameter_value().string_value} '
-                    f'-p unit_config:={self.get_parameter("unit_config").get_parameter_value().string_value}'
-                ],
-                env=env,
+            for k in ('ROS_DOMAIN_ID', 'RMW_IMPLEMENTATION', 'AMENT_PREFIX_PATH',
+                      'COLCON_PREFIX_PATH', 'ROS_DISTRO'):
+                if k in os.environ:
+                    env[k] = os.environ[k]
+
+            lucid = self._cfg.get('lucid_camera', {})
+            cfg_path  = self.get_parameter('config').get_parameter_value().string_value
+            unit_path = self.get_parameter('unit_config').get_parameter_value().string_value
+
+            cmd = (
+                'source /opt/ros/humble/setup.bash && '
+                f'source {os.path.expanduser("~")}/tankervision_flight/install/setup.bash && '
+                'ros2 run arena_camera_node start '
+                '--ros-args '
+                '-r /arena_camera_node/images:=/cam0/image_raw '
+                '-p hardware_trigger:=true '
+                f'-p width:={lucid.get("width", 5320)} '
+                f'-p height:={lucid.get("height", 4600)} '
+                f'-p pixelformat:={lucid.get("pixelformat", "bayer_rggb16")} '
+                f'-p qos_reliability:={lucid.get("qos_reliability", "reliable")} '
+                f'-p exposure_auto:={lucid.get("exposure_auto", "Continuous")} '
+                f'-p gain_auto:={lucid.get("gain_auto", "Continuous")} '
+                f'-p target_brightness:={int(lucid.get("target_brightness", 70))} '
+                f'-p gamma:={float(lucid.get("gamma", 0.5))} '
+                f'-p exposure_auto_lower_limit:={float(lucid.get("exposure_auto_lower_limit", 100.0))} '
+                f'-p exposure_auto_upper_limit:={float(lucid.get("exposure_auto_upper_limit", 30000.0))} '
+                f'-p exposure_auto_algorithm:={lucid.get("exposure_auto_algorithm", "Mean")} '
+                f'-p exposure_auto_damping:={float(lucid.get("exposure_auto_damping", 89.8))} '
+                f'-p raw_save_root:={self._cfg.get("storage", {}).get("root", "/mnt/storage")} '
+                f'-p config:={cfg_path} '
+                f'-p unit_config:={unit_path}'
             )
+
+            subprocess.Popen(['bash', '-c', cmd], env=env)
             _py_logger.info('arena_camera_node restarted with hardware_trigger=true')
+
         except Exception as e:
             _py_logger.error(f'Failed to restart arena_camera_node: {e}')
 
