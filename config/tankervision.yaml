@@ -19,7 +19,7 @@ lucid_camera:
   topic: /cam0/image_raw
   width: 5320
   height: 4600
-  hardware_trigger: true
+  hardware_trigger: false
   pixelformat: bayer_rggb16
   qos_reliability: reliable
 

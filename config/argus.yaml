@@ -1,7 +1,7 @@
 # tankervision.yaml — Unique Configuration for Each Flight Computer.
 # Change 'mode' before each flight.
 
-mode: testing
+mode: flight
 
 unit:
   name: argus

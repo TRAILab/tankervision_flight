@@ -84,4 +84,32 @@ source /opt/ros/humble/setup.bash
 cd "$REPO_DIR"
 colcon build --symlink-install --packages-skip xsens_mti_ros2_driver
 
+echo "[install] Configuring auto-login and disabling screen lock..."
+
+# Console auto-login via getty override (works headless and with desktop)
+sudo mkdir -p /etc/systemd/system/getty@tty1.service.d/
+sudo tee /etc/systemd/system/getty@tty1.service.d/autologin.conf > /dev/null << UNIT
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin $CURRENT_USER --noclear %I \$TERM
+UNIT
+
+# GDM auto-login (display manager, if present)
+if [ -f /etc/gdm3/custom.conf ]; then
+    sudo sed -i "s/^#\?\s*AutomaticLoginEnable\s*=.*/AutomaticLoginEnable=true/" /etc/gdm3/custom.conf
+    sudo sed -i "s/^#\?\s*AutomaticLogin\s*=.*/AutomaticLogin=$CURRENT_USER/" /etc/gdm3/custom.conf
+    grep -q "^AutomaticLoginEnable" /etc/gdm3/custom.conf || \
+        sudo sed -i "/^\[daemon\]/a AutomaticLoginEnable=true\nAutomaticLogin=$CURRENT_USER" /etc/gdm3/custom.conf
+fi
+
+# Disable screen lock and idle blank
+# (best-effort — if install runs before first login, re-run manually:
+#  gsettings set org.gnome.desktop.screensaver lock-enabled false)
+_dbus="unix:path=/run/user/$(id -u "$CURRENT_USER")/bus"
+sudo -u "$CURRENT_USER" DBUS_SESSION_BUS_ADDRESS="$_dbus" \
+    gsettings set org.gnome.desktop.screensaver lock-enabled false 2>/dev/null || \
+    echo "[install] Note: gsettings screen-lock — run manually after first login if this failed"
+sudo -u "$CURRENT_USER" DBUS_SESSION_BUS_ADDRESS="$_dbus" \
+    gsettings set org.gnome.desktop.session idle-delay 0 2>/dev/null || true
+
 echo "[install] Done. Reboot to verify all services start correctly."
