@@ -198,6 +198,11 @@ class StatusNode(Node):
         self._maxvis_device      = self._cfg.get('analog_camera', {}).get('device', '/dev/video0')
         self._record_count = 0
 
+        # Hardware trigger mode from config
+        _ht = self._cfg.get('lucid_camera', {}).get('hardware_trigger', False)
+        self._hw_trigger_mode = str(_ht).lower()   # 'false' | 'true' | 'on_pps'
+        self._pps_trigger_done = False
+
         # ─── State handlers ──────────────────────────────────────────────
         self.imu       = StateHandler('IMU',       'IMU_OK',              'IMU_NO_HEARTBEAT')
         self.camera    = StateHandler('CAMERA',    'CAMERA_RECEIVING',    'CAMERA_NO_HEARTBEAT')
@@ -398,6 +403,42 @@ class StatusNode(Node):
         if state != self.time_sync_state:
             self.time_sync_state = state
             _py_logger.info(f'Time sync: {state}')
+            if pps_ok and self._hw_trigger_mode == 'on_pps' and not self._pps_trigger_done:
+                self._pps_trigger_done = True
+                threading.Thread(target=self._restart_arena_with_hardware_trigger, daemon=True).start()
+
+
+    # ─── Restart Camera on PPS ────────────────────────────────────────────────
+    def _restart_arena_with_hardware_trigger(self):
+        _py_logger.info('PPS acquired — restarting arena_camera_node with hardware trigger')
+        try:
+            subprocess.run(
+                ['pkill', '-f', 'arena_camera_node'],
+                check=False, timeout=5
+            )
+            import time; time.sleep(2)  # let node die cleanly
+            env = os.environ.copy()
+            env['PYTHONUNBUFFERED'] = '1'
+            subprocess.Popen(
+                [
+                    'bash', '-c',
+                    'source /opt/ros/humble/setup.bash && '
+                    f'source {os.path.expanduser("~")}/tankervision_flight/install/setup.bash && '
+                    'ros2 run arena_camera_node start '
+                    '--ros-args '
+                    '-r /arena_camera_node/images:=/cam0/image_raw '
+                    '-p hardware_trigger:=true '
+                    f'-p width:={self._cfg.get("lucid_camera", {}).get("width", 5320)} '
+                    f'-p height:={self._cfg.get("lucid_camera", {}).get("height", 4600)} '
+                    f'-p pixelformat:={self._cfg.get("lucid_camera", {}).get("pixelformat", "bayer_rggb16")} '
+                    f'-p config:={self.get_parameter("config").get_parameter_value().string_value} '
+                    f'-p unit_config:={self.get_parameter("unit_config").get_parameter_value().string_value}'
+                ],
+                env=env,
+            )
+            _py_logger.info('arena_camera_node restarted with hardware_trigger=true')
+        except Exception as e:
+            _py_logger.error(f'Failed to restart arena_camera_node: {e}')
 
     # ─── Flight detection ─────────────────────────────────────────────────────
     def _takeoff_procedure(self, mag: float):

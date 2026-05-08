@@ -1,4 +1,6 @@
+# tankervision.yaml — System Configuration for Each Flight Computer.
 
+#hardware_trigger: false | true | on_pps
 
 notifications:
   email_to: wildfire@robotics.utias.utoronto.ca

@@ -70,6 +70,8 @@ def _node_params() -> list:
 def _launch_lucid_camera(_):
     cfg   = _load_cfg()
     lucid = cfg.get('lucid_camera', {})
+    ht_cfg = lucid.get('hardware_trigger', False)
+    ht_bool = (ht_cfg is True) or (str(ht_cfg).lower() == 'true')
     node = Node(
         package='arena_camera_node',
         executable='start',
@@ -80,7 +82,7 @@ def _launch_lucid_camera(_):
             {'width':                     lucid.get('width',                      5320)},
             {'height':                    lucid.get('height',                     4600)},
             {'pixelformat':               lucid.get('pixelformat',               'bayer_rggb16')},
-            {'hardware_trigger':          bool(lucid.get('hardware_trigger',      False))},
+            {'hardware_trigger':          ht_bool},
             {'exposure_auto':             lucid.get('exposure_auto',             'Continuous')},
             {'gain_auto':                 lucid.get('gain_auto',                 'Continuous')},
             {'target_brightness':         int(lucid.get('target_brightness',      70))},
