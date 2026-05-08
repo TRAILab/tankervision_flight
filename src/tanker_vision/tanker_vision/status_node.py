@@ -548,7 +548,9 @@ class StatusNode(Node):
             f'=== STORAGE USAGE ===\n{du_output}'
         )
         self._send_email(self._email_subject('Takeoff'), body)
-        time.sleep(5)
+        delay = self._cfg.get('cellular', {}).get('takeoff_delay_sec', 300)
+        _py_logger.info(f'Cellular off in {delay}s...')
+        time.sleep(delay)
         self._executor.submit(self._cellular_off)
 
     def velocity_callback(self, msg):

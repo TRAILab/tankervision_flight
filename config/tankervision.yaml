@@ -12,6 +12,7 @@ notifications:
 cellular: 
   manage: false 
   interface: wwan0
+  takeoff_delay_sec: 300 
 
 storage:
   root: /mnt/storage
