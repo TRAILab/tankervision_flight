@@ -16,6 +16,7 @@ from datetime import datetime
 from rcl_interfaces.msg import Log
 from std_msgs.msg import String, Empty
 from sensor_msgs.msg import Imu, Image
+from geometry_msgs.msg import Vector3Stamped
 
 import rclpy
 from rclpy.node import Node
@@ -224,8 +225,7 @@ class StatusNode(Node):
         self.create_subscription(Log,    '/rosout',              self._rosout_cb,              100)
         # MaxVis: best-effort, depth=1 — only used to detect if analog signal is present
         self.create_subscription(Image, '/cam1/image_raw', self._maxvis_cb, _BEST_EFFORT_QOS)
-        # TODO: subscribe to velocity topic once GNSS velocity source is available
-        # (xsens /filter/velocity is gone; IM19 does not publish a fused velocity)
+        self.create_subscription(Vector3Stamped, '/filter/velocity', self.velocity_callback, 10)
 
         #create temp subscription to test hardware restart. 
         self.create_subscription(
@@ -399,20 +399,20 @@ class StatusNode(Node):
             self.internet_state = state
             _py_logger.info(f'Internet: {state}')
 
-            name  = self._unit.get('name', 'unit')
-            plane = self._unit.get('plane_number', '?')
+        name  = self._unit.get('name', 'unit')
+        plane = self._unit.get('plane_number', '?')
 
-            if connected and self.send_landing_email:
-                self.send_landing_email = False
-                self._executor.submit(self._send_landing_email_bg)
-            elif connected and self.send_startup_email and self._session_path:
-                self.send_startup_email = False
-                body = (
-                    f'TankerVision is online.\n'
-                    f'Unit: {name} | Plane: {plane} | Mode: {self._mode}\n'
-                    f'Session: {self._session_path}'
-                )
-                self._executor.submit(self._send_email, self._email_subject('Online'), body)
+        if connected and self.send_landing_email:
+            self.send_landing_email = False
+            self._executor.submit(self._send_landing_email_bg)
+        elif connected and self.send_startup_email and self._session_path:
+            self.send_startup_email = False
+            body = (
+                f'TankerVision is online.\n'
+                f'Unit: {name} | Plane: {plane} | Mode: {self._mode}\n'
+                f'Session: {self._session_path}'
+            )
+            self._executor.submit(self._send_email, self._email_subject('Online'), body)
 
     def _check_time_sync(self):
         threading.Thread(target=self._check_time_sync_bg, daemon=True).start()

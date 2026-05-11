@@ -495,6 +495,11 @@ void ArenaCameraNode::publish_images_()
         std::memcpy(p_image_msg->data.data(), bgr_half.data, img_data_size);
 
         m_pub_->publish(std::move(p_image_msg));
+        {
+          std_msgs::msg::String hb;
+          hb.data = "heartbeat";
+          heartbeat_pub_->publish(hb);
+        }
         Arena::ImageFactory::Destroy(converted);
         converted = nullptr;
         m_pDevice->RequeueBuffer(pImage);

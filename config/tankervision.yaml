@@ -50,3 +50,6 @@ yolo:
 ptp:
   interface: auto
   require_sync_before_launch: true
+
+gpsd_velocity:
+  publish_rate_hz: 1.0

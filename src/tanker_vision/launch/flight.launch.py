@@ -163,8 +163,17 @@ def generate_launch_description():
         )
     )
 
+    gpsd_velocity_node = Node(
+        package='tanker_vision',
+        executable='gpsd_velocity_node',
+        name='gpsd_velocity_node',
+        output='screen',
+        parameters=_node_params(),
+    )
+
     return LaunchDescription([
         im19_launch,
+        gpsd_velocity_node,
         OpaqueFunction(function=_launch_lucid_camera),
         OpaqueFunction(function=_launch_analog_camera),
         OpaqueFunction(function=_launch_status_node),
