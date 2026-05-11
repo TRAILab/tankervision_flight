@@ -147,7 +147,9 @@ set +u
 source /opt/ros/humble/setup.bash
 set -u
 cd "$REPO_DIR"
-colcon build --symlink-install --packages-skip xsens_mti_ros2_driver
+colcon build --symlink-install --packages-skip xsens_mti_ros2_driver \
+    --parallel-workers 2 \
+    --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 # ── 5b. Restart tankervision after build ──────────────────────────
 restart_svc tankervision.service

@@ -8,6 +8,7 @@ Requires=ptp4l.service mnt-storage.mount
 Type=simple
 User=FLIGHT_USER
 Environment="HOME=/home/FLIGHT_USER"
+ExecStartPre=/bin/sleep 15
 ExecStartPre=-/usr/local/bin/configure-dfg-camera.sh /home/FLIGHT_USER/tankervision_flight/config/tankervision.yaml
 ExecStart=/bin/bash -c 'source /opt/ros/humble/setup.bash && source /home/FLIGHT_USER/tankervision_flight/install/setup.bash && ros2 launch tanker_vision flight.launch.py'
 Restart=on-failure
