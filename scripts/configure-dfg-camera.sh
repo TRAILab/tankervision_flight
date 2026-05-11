@@ -92,7 +92,10 @@ for line in content.splitlines():
     error "Invalid standard '$STANDARD' in config. Must be NTSC or PAL."
 
 # ── Check device exists ───────────────────────────────────────────
-[[ -e "$DEVICE" ]] || error "Device $DEVICE not found. Is the DFG2USB Pro plugged in?"
+if [[ ! -e "$DEVICE" ]]; then
+    warn "Device $DEVICE not found — DFG2USB Pro may not be connected. Skipping configuration."
+    exit 0
+fi
 
 info "Configuring $DEVICE as $STANDARD..."
 
