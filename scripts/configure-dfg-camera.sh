@@ -99,19 +99,22 @@ info "Configuring $DEVICE as $STANDARD..."
 # ── Apply settings ────────────────────────────────────────────────
 sleep 1   # Give device a moment to settle after detection
 
-v4l2-ctl --device="$DEVICE" --set-input=0
-v4l2-ctl --device="$DEVICE" --set-standard="$STANDARD"
+v4l2-ctl --device="$DEVICE" --set-input=0 \
+    && info "  Input: 0" \
+    || warn "  --set-input failed (device may not support it)"
+
+v4l2-ctl --device="$DEVICE" --set-standard="$STANDARD" \
+    && info "  Standard: $STANDARD" \
+    || warn "  --set-standard failed (device may auto-detect standard)"
 
 if [[ "$STANDARD" == "NTSC" ]]; then
-    v4l2-ctl --device="$DEVICE" --set-fmt-video=width=720,height=480,pixelformat=YUYV
-    info "  Input:    0"
-    info "  Standard: NTSC (720x480 @ 29.97fps)"
-    info "  Format:   YUYV"
+    v4l2-ctl --device="$DEVICE" --set-fmt-video=width=720,height=480,pixelformat=YUYV \
+        && info "  Format: YUYV 720x480 (NTSC)" \
+        || warn "  --set-fmt-video failed"
 else
-    v4l2-ctl --device="$DEVICE" --set-fmt-video=width=720,height=576,pixelformat=YUYV
-    info "  Input:    0"
-    info "  Standard: PAL (720x576 @ 25fps)"
-    info "  Format:   YUYV"
+    v4l2-ctl --device="$DEVICE" --set-fmt-video=width=720,height=576,pixelformat=YUYV \
+        && info "  Format: YUYV 720x576 (PAL)" \
+        || warn "  --set-fmt-video failed"
 fi
 
-info "DFG2USB Pro configured successfully."
+info "DFG2USB Pro configuration complete."
