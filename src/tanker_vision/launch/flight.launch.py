@@ -124,6 +124,8 @@ def _launch_analog_camera(_):
             ('/image_raw',   '/cam1/image_raw'),
             ('/camera_info', '/cam1/camera_info'),
         ],
+        respawn=True,
+        respawn_delay=2.0,
     )
     return [node]
 

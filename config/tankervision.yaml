@@ -7,12 +7,13 @@ notifications:
   gmail_user: wildfire@robotics.utias.utoronto.ca
   gmail_app_password: aqszpdqdypwqrkre
   
-# set manage to true to turn on/off with takeoff landing
-# TO-DO: confirm implementation when cellular is on. use nmcli device status
-cellular: 
-  manage: false 
-  interface: wwan0
-  takeoff_delay_sec: 300 
+# manage: true to enable cellular on/off control
+# takeoff_delay: 300  = turn off 300 seconds after node starts (regardless of flight state)
+#                'in_air' = turn off when speed >14m/s detected
+cellular:
+  manage: false
+  # at_port: /dev/ttyUSB5  # optional — auto-detected from ttyUSB ports if not set
+  takeoff_delay: 300
 
 storage:
   root: /mnt/storage
@@ -53,3 +54,7 @@ ptp:
 
 gpsd_velocity:
   publish_rate_hz: 1.0
+
+velocity:
+  takeoff_threshold_m_s: 14.0
+  landing_threshold_m_s: 1.0

@@ -139,6 +139,7 @@ def is_disk_mounted(mount_point: str = '/mnt/storage') -> bool:
     return os.path.ismount(mount_point)
 
 
+
 # ─── State handler ──────────────────────────────────────────────────────────────
 class StateHandler:
     def __init__(self, name: str, ok_state: str, no_heartbeat_state: str):
@@ -192,6 +193,33 @@ class StatusNode(Node):
         self.internet_state     = None
         self.time_sync_state    = None
         self.velocity_msg_count = 0
+
+        # Flight detection thresholds
+        _vel_cfg = self._cfg.get('velocity', {})
+        self._takeoff_threshold = float(_vel_cfg.get('takeoff_threshold_m_s', 14.0))
+        self._landing_threshold = float(_vel_cfg.get('landing_threshold_m_s', 1.0))
+        _py_logger.info(
+            f'Velocity thresholds — takeoff: {self._takeoff_threshold} m/s, '
+            f'landing: {self._landing_threshold} m/s'
+        )
+
+        # Cellular AT port — config override or auto-detect
+        _at_port_cfg = self._cfg.get('cellular', {}).get('at_port', '').strip()
+        self._cellular_at_port = _at_port_cfg if _at_port_cfg else self._detect_at_port()
+        if self._cellular_at_port:
+            _py_logger.info(f'Cellular AT port: {self._cellular_at_port}')
+        else:
+            _py_logger.warning('No cellular AT port found — cellular management disabled')
+
+        # Cellular takeoff delay: 'in_air' or seconds-from-boot integer
+        _cell_cfg = self._cfg.get('cellular', {})
+        _td = _cell_cfg.get('takeoff_delay', 'in_air')
+        try:
+            _td_secs = int(_td)
+            _py_logger.info(f'Cellular off scheduled in {_td_secs}s from boot')
+            self._executor.submit(self._cellular_off_after, _td_secs)
+        except (ValueError, TypeError):
+            _py_logger.info('Cellular off mode: in_air (velocity-triggered)')
 
         self._session_path      = None
         self._flight_log_fh     = None
@@ -501,69 +529,72 @@ class StatusNode(Node):
             _py_logger.error(f'Failed to restart arena_camera_node: {e}')
 
     # ─── Cellular Status ─────────────────────────────────────────────────────
+    def _detect_at_port(self) -> str:
+        """Probe all ttyUSB ports and return the first that responds to AT."""
+        import serial
+        import glob
+        ports = sorted(glob.glob('/dev/ttyUSB*'))
+        for port in ports:
+            try:
+                with serial.Serial(port, 115200, timeout=1) as s:
+                    s.write(b'AT\r\n')
+                    time.sleep(0.5)
+                    resp = s.read(s.in_waiting).decode(errors='ignore')
+                    if 'OK' in resp:
+                        _py_logger.info(f'AT port detected: {port}')
+                        return port
+                    else:
+                        _py_logger.debug(f'{port}: no AT response')
+            except Exception as e:
+                _py_logger.debug(f'{port}: {e}')
+        return ''
+
+    def _cellular_off_after(self, delay_secs: int):
+        time.sleep(delay_secs)
+        self._cellular_off()
+
+    def _cellular_at(self, cmd: str):
+        """Send a single AT command, return response string."""
+        import serial
+        with serial.Serial(self._cellular_at_port, 115200, timeout=2) as s:
+            s.write((cmd + '\r\n').encode())
+            time.sleep(0.5)
+            return s.read(s.in_waiting).decode(errors='ignore').strip()
+
     def _cellular_off(self):
-        """Turn off cellular on takeoff. Stub — not tested."""
-        iface = self._cfg.get('cellular', {}).get('interface', 'wwan0')
-        if not self._cfg.get('cellular', {}).get('manage', False):
+        if not self._cfg.get('cellular', {}).get('manage', False) or not self._cellular_at_port:
             return
         try:
-            subprocess.run(['nmcli', 'radio', 'wwan', 'off'], check=False, timeout=5)
-            _py_logger.info(f'Cellular off: nmcli radio wwan off')
+            resp = self._cellular_at('AT+CFUN=4')
+            _py_logger.info(f'Cellular off (AT+CFUN=4): {resp}')
         except Exception as e:
             _py_logger.error(f'Failed to turn cellular off: {e}')
 
     def _cellular_on(self):
-        """Turn on cellular on landing. Stub — not tested."""
-        iface = self._cfg.get('cellular', {}).get('interface', 'wwan0')
-        if not self._cfg.get('cellular', {}).get('manage', False):
+        if not self._cfg.get('cellular', {}).get('manage', False) or not self._cellular_at_port:
             return
         try:
-            subprocess.run(['nmcli', 'radio', 'wwan', 'on'], check=False, timeout=5)
-            _py_logger.info(f'Cellular on: nmcli radio wwan on')
+            resp = self._cellular_at('AT+CFUN=1')
+            _py_logger.info(f'Cellular on (AT+CFUN=1): {resp}')
         except Exception as e:
             _py_logger.error(f'Failed to turn cellular on: {e}')
 
     # ─── Flight detection ─────────────────────────────────────────────────────
-    def _takeoff_procedure(self, mag: float):
-        name  = self._unit.get('name', 'unit')
-        plane = self._unit.get('plane_number', '?')
-
-        logs = _log_stream.getvalue()
-        _log_stream.truncate(0)
-        _log_stream.seek(0)
-
-        try:
-            du_output = subprocess.check_output(
-                ['du', '-sh', self._storage_root],
-                text=True, stderr=subprocess.STDOUT,
-            )
-        except subprocess.CalledProcessError as e:
-            du_output = f'du error: {e.output or e}'
-
-        body = (
-            f'Takeoff detected for {name} ({plane}).\n'
-            f'Velocity: {mag:.2f} m/s\n'
-            f'Session: {self._session_path}\n\n'
-            f'=== NODE LOGS ===\n{logs}\n\n'
-            f'=== STORAGE USAGE ===\n{du_output}'
-        )
-        self._send_email(self._email_subject('Takeoff'), body)
-        delay = self._cfg.get('cellular', {}).get('takeoff_delay_sec', 300)
-        _py_logger.info(f'Cellular off in {delay}s...')
-        time.sleep(delay)
-        self._executor.submit(self._cellular_off)
-
     def velocity_callback(self, msg):
         self.velocity_msg_count += 1
-        if self.velocity_msg_count % 100:
+        if self.velocity_msg_count % 10:
             return
         mag = math.sqrt(msg.vector.x**2 + msg.vector.y**2 + msg.vector.z**2)
 
-        if mag > 14.0 and not self.is_in_air:
+        if mag > self._takeoff_threshold and not self.is_in_air:
             self.is_in_air = True
             _py_logger.info(f'Takeoff detected: {mag:.2f} m/s')
-            self._executor.submit(self._takeoff_procedure, mag)
-        elif mag < 1.0 and self.is_in_air:
+            _td = self._cfg.get('cellular', {}).get('takeoff_delay', 'in_air')
+            try:
+                int(_td)  # timer mode — cellular already scheduled at boot, nothing to do
+            except (ValueError, TypeError):
+                self._executor.submit(self._cellular_off)  # in_air mode
+        elif mag < self._landing_threshold and self.is_in_air:
             self.is_in_air = False
             _py_logger.info(f'Landing detected: {mag:.2f} m/s')
             self.send_landing_email = True
