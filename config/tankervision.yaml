@@ -34,7 +34,7 @@ lucid_camera:
 
 analog_camera:
   topic: /cam1/image_raw
-  device: /dev/video0
+  device: /dev/video1
   standard: NTSC
   ntsc:
     image_size: [720, 480]

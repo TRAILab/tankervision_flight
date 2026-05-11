@@ -225,7 +225,13 @@ class StatusNode(Node):
         self._flight_log_fh     = None
         self._maxvis_ever_active = False
         self._maxvis_last_check  = 0.0
-        self._maxvis_device      = self._cfg.get('analog_camera', {}).get('device', '/dev/video0')
+        # Check all video devices for MaxVis signal — device number can vary on startup
+        import glob as _glob
+        _configured = self._cfg.get('analog_camera', {}).get('device', '')
+        self._maxvis_devices = (
+            [_configured] if _configured
+            else sorted(_glob.glob('/dev/video*'))
+        )
         self._record_count = 0
 
         # Hardware trigger mode from config
@@ -400,16 +406,18 @@ class StatusNode(Node):
         if now - self._maxvis_last_check < 1.0:
             return
         self._maxvis_last_check = now
-        try:
-            out = subprocess.check_output(
-                ['v4l2-ctl', f'--device={self._maxvis_device}', '--get-input'],
-                stderr=subprocess.DEVNULL, timeout=2,
-            ).decode()
-            if 'no signal' not in out.lower():
-                self._maxvis_ever_active = True
-                _py_logger.info('MaxVis analog signal detected')
-        except Exception:
-            pass
+        for dev in self._maxvis_devices:
+            try:
+                out = subprocess.check_output(
+                    ['v4l2-ctl', f'--device={dev}', '--get-input'],
+                    stderr=subprocess.DEVNULL, timeout=2,
+                ).decode()
+                if 'no signal' not in out.lower():
+                    self._maxvis_ever_active = True
+                    _py_logger.info(f'MaxVis analog signal detected on {dev}')
+                    break
+            except Exception:
+                pass
 
     def _record_mode_cb(self, msg: String):
         if msg.data.strip().lower() == 'record':
