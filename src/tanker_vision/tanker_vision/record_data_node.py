@@ -140,7 +140,7 @@ class RecordDataNode(Node):
         cmd = [
             '/opt/ros/humble/bin/ros2', 'bag', 'record',
             '-o', bag_path,
-            '/cam0/image_raw', '/cam1/image_raw', '/im19/imu',
+            '/cam0/image_raw', '/im19/imu',
             '--compression-mode', 'message',
             '--compression-format', 'zstd',
             '-b', '100000000',
@@ -151,6 +151,7 @@ class RecordDataNode(Node):
         self.get_logger().info(f'Recording started: {bag_path}')
 
     def _check_recording_status(self):
+        self._publish_status('RECORDING' if self._is_recording else 'SCANNING')
         if not self._is_recording:
             return
         if time.time() > self._recording_end:

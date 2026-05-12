@@ -103,11 +103,9 @@ def _launch_analog_camera(_):
     analog   = cfg.get('analog_camera', {})
     standard = analog.get('standard', 'NTSC').upper()
     device   = analog.get('device', '/dev/video0')
-
     if standard not in _VIDEO_STANDARDS:
         print(f'[flight.launch] WARNING: unknown video standard "{standard}", defaulting to NTSC')
         standard = 'NTSC'
-
     params = _VIDEO_STANDARDS[standard]
     node = Node(
         package='v4l2_camera',
@@ -156,6 +154,26 @@ def _launch_record_node(_):
     )
     return [node]
 
+def _launch_maxvis_record_node(_):
+    cfg  = _load_cfg()
+    mode = cfg.get('mode', 'testing')
+    if mode != 'flight':
+        return []
+    record_fps = float(cfg.get('maxvis_recording', {}).get('record_fps', 1.0))
+    throttle_node = Node(
+        package='topic_tools',
+        executable='throttle',
+        name='cam1_throttle',
+        arguments=['messages', '/cam1/image_raw', str(record_fps), '/cam1/image_throttled'],
+    )
+    maxvis_node = Node(
+        package='tanker_vision',
+        executable='maxvis_record_node',
+        name='maxvis_record_node',
+        output='screen',
+        parameters=_node_params(),
+    )
+    return [throttle_node, maxvis_node]
 
 def generate_launch_description():
     im19_dir = get_package_share_directory('im19_ros2')
@@ -180,6 +198,7 @@ def generate_launch_description():
         OpaqueFunction(function=_launch_analog_camera),
         OpaqueFunction(function=_launch_status_node),
         OpaqueFunction(function=_launch_record_node),
+        OpaqueFunction(function=_launch_maxvis_record_node),
     ])
 
 

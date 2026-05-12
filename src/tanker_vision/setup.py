@@ -32,6 +32,7 @@ setup(
             'record_data_node = tanker_vision.record_data_node:main',
             'camera_viewer_node = tanker_vision.camera_viewer_node:main',
             'gpsd_velocity_node = tanker_vision.gpsd_velocity_node:main',
+            'maxvis_record_node = tanker_vision.maxvis_record_node:main',
         ],
     },
 )

@@ -240,6 +240,7 @@ class StatusNode(Node):
         self.imu       = StateHandler('IMU',       'IMU_OK',              'IMU_NO_HEARTBEAT')
         self.camera    = StateHandler('CAMERA',    'CAMERA_RECEIVING',    'CAMERA_NO_HEARTBEAT')
         self.recording = StateHandler('RECORDING', 'RECORDING_RECORDING', 'RECORDING_NO_HEARTBEAT')
+        self.maxvis    = StateHandler('MAXVIS_RECORD', 'MAXVIS_RECORDING', 'MAXVIS_NO_HEARTBEAT')
 
         # ─── Session path publisher (latched) ────────────────────────────
         self._session_path_pub = self.create_publisher(
@@ -249,6 +250,7 @@ class StatusNode(Node):
         self.create_subscription(Imu,    '/im19/imu',            self._imu_heartbeat_cb,       10)
         self.create_subscription(String, 'camera_heartbeat',     self._camera_heartbeat_cb,    10)
         self.create_subscription(String, 'record_data/status',   self._recording_heartbeat_cb, 10)
+        self.create_subscription(String, '/maxvis_record/status', self._maxvis_record_heartbeat_cb, 10)
         self.create_subscription(String, '/camera/record_mode',  self._record_mode_cb,         10)
         self.create_subscription(Log,    '/rosout',              self._rosout_cb,              100)
         # MaxVis: best-effort, depth=1 — only used to detect if analog signal is present
@@ -265,7 +267,8 @@ class StatusNode(Node):
         # ─── Timers ──────────────────────────────────────────────────────
         self.create_timer(1.25, self._check_camera_heartbeat)
         self.create_timer(1.0,  self._check_imu_heartbeat)
-        self.create_timer(1.25, self._check_recording_heartbeat)
+        self.create_timer(7.0, self._check_recording_heartbeat)
+        self.create_timer(7.0, self._check_maxvis_record_heartbeat)
         self.create_timer(5.0,  self._check_internet)
         self.create_timer(10.0, self._check_time_sync)
         self._session_timer = self.create_timer(5.0, self._try_create_session)
@@ -373,6 +376,13 @@ class StatusNode(Node):
             return
         self.recording.update_heartbeat(now, st)
 
+    def _maxvis_record_heartbeat_cb(self, msg: String):
+        now = self.get_clock().now()
+        if msg.data == 'RECORDING':
+            self.maxvis.update_heartbeat(now, 'MAXVIS_RECORDING')
+        else:
+            self.maxvis.update_heartbeat(now, 'MAXVIS_SCANNING')
+
     def _check_imu_heartbeat(self):
         self.imu.check_heartbeat_timeout(self.get_clock().now(), 2.0)
 
@@ -380,8 +390,10 @@ class StatusNode(Node):
         self.camera.check_heartbeat_timeout(self.get_clock().now(), 3.0)
 
     def _check_recording_heartbeat(self):
-        self.recording.check_heartbeat_timeout(self.get_clock().now(), 2.0)
+        self.recording.check_heartbeat_timeout(self.get_clock().now(), 8.0)
 
+    def _check_maxvis_record_heartbeat(self):
+        self.maxvis.check_heartbeat_timeout(self.get_clock().now(), 2.5)
     # ─── /rosout and trigger logging ─────────────────────────────────────────
     def _rosout_cb(self, msg: Log):
         if self._flight_log_fh is None:

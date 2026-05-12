@@ -43,6 +43,13 @@ analog_camera:
     image_size: [720, 576]
     time_per_frame: [1, 25]
 
+#dominance ration:  B must be this many times > R and G to be "blue"
+#threshold: minimum mean B value before ratio check applies
+maxvis_recording:
+  blue_dominance_ratio: 1.5   
+  blue_mean_threshold: 80
+  record_fps: 1.0
+
 yolo:
   model: src/tanker_vision/tanker_vision/fire_detection.pt
   fire_class: 2
