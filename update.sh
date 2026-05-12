@@ -153,6 +153,10 @@ set +u
 source /opt/ros/humble/setup.bash
 set -u
 cd "$REPO_DIR"
+rm -rf \
+    "$REPO_DIR/build/tanker_vision" \
+    "$REPO_DIR/install/tanker_vision" \
+    "$REPO_DIR/src/tanker_vision/tanker_vision.egg-info"
 colcon build --symlink-install --packages-skip xsens_mti_ros2_driver \
     --parallel-workers 2 \
     --cmake-args -DCMAKE_BUILD_TYPE=Release
