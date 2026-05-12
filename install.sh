@@ -35,11 +35,6 @@ sed "s/\[eno1\]/[$CAMERA_IFACE]/" "$REPO_DIR/config/ptp/ptp4l.conf" | sudo tee /
 
 # udev rules
 sudo cp "$REPO_DIR/config/udev/99-dfg-camera.rules" /etc/udev/rules.d/99-dfg-camera.rules
-sudo cp "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" /usr/local/bin/identify_and_install_udev.sh
-sudo chmod +x /usr/local/bin/identify_and_install_udev.sh
-sudo cp "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" /usr/local/bin/identify_and_install_udev.sh
-sudo chmod +x /usr/local/bin/identify_and_install_udev.sh
-sudo cp "$REPO_DIR/config/udev/99-gps.rules" /etc/udev/rules.d/99-gps.rules
 sudo udevadm control --reload-rules
 sudo udevadm trigger
 
@@ -55,6 +50,9 @@ sudo sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/tankervision.ser
 sudo cp "$REPO_DIR/startup_scripts/gnss-record.service" /etc/systemd/system/
 sudo cp "$REPO_DIR/startup_scripts/gnss_record.sh" /usr/local/bin/gnss_record.sh
 sudo chmod +x /usr/local/bin/gnss_record.sh
+sudo cp "$REPO_DIR/startup_scripts/gpsd-chrony.service" /etc/systemd/system/
+sudo cp "$REPO_DIR/startup_scripts/gpsd-chrony-restart.sh" /usr/local/bin/gpsd-chrony-restart.sh
+sudo chmod +x /usr/local/bin/gpsd-chrony-restart.sh
 
 echo "[install] Configuring Lucid Triton2 GigE camera network interface ($CAMERA_IFACE)..."
 if nmcli connection show "$CAMERA_IFACE" &>/dev/null; then
@@ -75,12 +73,18 @@ sudo nmcli connection up "$CAMERA_IFACE" || true
 
 echo "[install] Enabling services..."
 sudo systemctl daemon-reload
-sudo systemctl enable gpsd.service
 sudo systemctl disable gpsd.socket || true
 sudo systemctl mask gpsd.socket || true
-sudo systemctl enable chrony
-sudo systemctl enable ptp4l.service
-sudo systemctl enable tankervision.service
+for SVC in \
+    gpsd.service \
+    chrony \
+    ptp4l.service \
+    gpsd-chrony.service \
+    tankervision.service \
+    gnss-record.service
+do
+    sudo systemctl enable "$SVC"
+done
 
 echo "[install] Building ROS2 workspace..."
 source /opt/ros/humble/setup.bash

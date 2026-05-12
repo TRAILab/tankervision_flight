@@ -5,8 +5,8 @@ import os
 
 
 def generate_launch_description():
-    bringup_dir = get_package_share_directory('my_bringup')
-    im19_yaml = os.path.join(bringup_dir, 'config', 'im19.yaml')
+    im19_dir = get_package_share_directory('im19_ros2')
+    im19_yaml = os.path.join(im19_dir, 'config', 'im19.yaml')
 
     im19_node = Node(
         package='im19_ros2',

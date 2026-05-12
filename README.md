@@ -46,7 +46,7 @@ tankervision_flight/
 │   ├── gnss_imu/
 │   │   ├── save_gnss.sh           ← records raw GNSS serial to .ubx chunks
 │   │   └── save_imu.sh            ← records IMU rosbag via ROS2
-│   └── my_bringup/
+│   └── im19_ros2/
 │       └── launch/sensors.launch.py ← launches im19_mems_node
 ├── startup_scripts/
 │   ├── tankervision.service       ← main systemd service

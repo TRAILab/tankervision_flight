@@ -158,10 +158,10 @@ def _launch_record_node(_):
 
 
 def generate_launch_description():
-    my_bringup_dir = get_package_share_directory('my_bringup')
+    im19_dir = get_package_share_directory('im19_ros2')
     im19_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(my_bringup_dir, 'launch', 'sensors.launch.py')
+            os.path.join(im19_dir, 'launch', 'sensors.launch.py')
         )
     )
 

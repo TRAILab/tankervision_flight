@@ -62,7 +62,6 @@ fi
 
 # udev rules
 cp_config "$REPO_DIR/config/udev/99-dfg-camera.rules" /etc/udev/rules.d/99-dfg-camera.rules
-cp_config "$REPO_DIR/config/udev/99-gps.rules"        /etc/udev/rules.d/99-gps.rules
 udevadm control --reload-rules
 udevadm trigger
 info "  udev rules"
@@ -72,13 +71,13 @@ if [[ -f "$REPO_DIR/scripts/configure-dfg-camera.sh" ]]; then
     cp "$REPO_DIR/scripts/configure-dfg-camera.sh" /usr/local/bin/configure-dfg-camera.sh
     chmod +x /usr/local/bin/configure-dfg-camera.sh
 fi
-if [[ -f "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" ]]; then
-    cp "$REPO_DIR/startup_scripts/identify_and_install_udev.sh" /usr/local/bin/identify_and_install_udev.sh
-    chmod +x /usr/local/bin/identify_and_install_udev.sh
-fi
 if [[ -f "$REPO_DIR/startup_scripts/gnss_record.sh" ]]; then
     cp "$REPO_DIR/startup_scripts/gnss_record.sh" /usr/local/bin/gnss_record.sh
     chmod +x /usr/local/bin/gnss_record.sh
+fi
+if [[ -f "$REPO_DIR/startup_scripts/gpsd-chrony-restart.sh" ]]; then
+    cp "$REPO_DIR/startup_scripts/gpsd-chrony-restart.sh" /usr/local/bin/gpsd-chrony-restart.sh
+    chmod +x /usr/local/bin/gpsd-chrony-restart.sh
 fi
 info "  helper scripts"
 
@@ -112,7 +111,14 @@ info "Reloading systemd..."
 systemctl daemon-reload
 
 # Services that must always be enabled
-for SVC in gnss-record.service; do
+for SVC in \
+    gpsd.service \
+    chrony \
+    ptp4l.service \
+    gpsd-chrony.service \
+    tankervision.service \
+    gnss-record.service
+do
     if ! systemctl is-enabled --quiet "$SVC" 2>/dev/null; then
         systemctl enable "$SVC"
         info "  enabled $SVC"
@@ -158,7 +164,14 @@ restart_svc gnss-record.service
 # ── 6. Summary ────────────────────────────────────────────────────
 echo ""
 info "Done. Active service status:"
-for SVC in ptp4l.service tankervision.service gnss-record.service; do
+for SVC in \
+    chrony \
+    gpsd.service \
+    ptp4l.service \
+    gpsd-chrony.service \
+    tankervision.service \
+    gnss-record.service
+do
     STATUS=$(systemctl is-active "$SVC" 2>/dev/null || echo "inactive")
     if [[ "$STATUS" == "active" ]]; then
         echo -e "  ${GREEN}●${NC} $SVC"

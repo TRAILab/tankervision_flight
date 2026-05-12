@@ -1,148 +1,26 @@
 #!/usr/bin/env python3
-"""
-camera_viewer_node.py
-
-Displays Lucid and analog camera feeds in separate resizable windows.
-Each window scales its feed to fill the window as you drag it larger.
-A "Save" button is drawn in the corner of each window — click it or
-press 's' to save both frames to ~/saved_frames/.
-
-Topics:
-  Lucid  → /arena_camera_node/images
-  Analog → /v4l2_camera/image_raw
-
-Controls:
-  s / click Save button  - save current frames
-  q / ESC                - quit
-"""
-
 import os
-os.environ.setdefault('QT_QPA_FONTDIR', '/usr/share/fonts')  # suppress Qt font warning
-
 import threading
 from datetime import datetime
 
 import cv2
 import numpy as np
 import rclpy
+from cv_bridge import CvBridge, CvBridgeError
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image
+from std_msgs.msg import String
 
-# ── Topics ────────────────────────────────────────────────────────────────────
-LUCID_TOPIC  = '/cam0/image_raw'
-ANALOG_TOPIC = '/cam1/image_raw'
-
-# ── QoS — match publisher (SensorDataQoS = best-effort, keep-last 5) ─────────
-_BEST_EFFORT_QOS = QoSProfile(
-    reliability=ReliabilityPolicy.BEST_EFFORT,
+_LATCHED_QOS = QoSProfile(
+    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    reliability=ReliabilityPolicy.RELIABLE,
     history=HistoryPolicy.KEEP_LAST,
-    depth=10
+    depth=1,
 )
 
-# ── Save button geometry (pixels from top-left of displayed frame) ─────────────
-BTN_X, BTN_Y, BTN_W, BTN_H = 10, 10, 120, 40
+_DISPLAY_HEIGHT = 540  # both panels are scaled to this height for display
 
-# ── Encoding table ────────────────────────────────────────────────────────────
-_ENCODING_MAP = {
-    'bgr8':   (np.uint8,  3, None),
-    'rgb8':   (np.uint8,  3, cv2.COLOR_RGB2BGR),
-    'rgba8':  (np.uint8,  4, cv2.COLOR_RGBA2BGR),
-    'bgra8':  (np.uint8,  4, cv2.COLOR_BGRA2BGR),
-    'mono8':  (np.uint8,  1, cv2.COLOR_GRAY2BGR),
-    'mono16': (np.uint16, 1, None),
-    'yuv422': (np.uint8,  2, cv2.COLOR_YUV2BGR_YUYV),
-    '16uc1':  (np.uint16, 1, None),
-    '8uc1':   (np.uint8,  1, cv2.COLOR_GRAY2BGR),
-    '8uc3':   (np.uint8,  3, None),
-}
-
-
-def imgmsg_to_bgr(msg: Image) -> np.ndarray:
-    """Decode a sensor_msgs/Image to BGR numpy array without cv_bridge."""
-    encoding = msg.encoding.lower()
-    if encoding not in _ENCODING_MAP:
-        raise ValueError(f'Unsupported encoding: {msg.encoding}')
-
-    dtype, channels, cvt = _ENCODING_MAP[encoding]
-    arr = np.frombuffer(msg.data, dtype=dtype)
-    arr = arr.reshape((msg.height, msg.width) if channels == 1
-                      else (msg.height, msg.width, channels))
-
-    if encoding in ('mono16', '16uc1'):
-        arr = (arr >> 8).astype(np.uint8)
-        return cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
-
-    if cvt is not None:
-        arr = cv2.cvtColor(arr, cvt)
-
-    return arr
-
-
-def _fit_to_window(frame: np.ndarray, win_name: str) -> np.ndarray:
-    """Scale frame to fill the current window size, preserving aspect ratio with black bars."""
-    try:
-        _, _, win_w, win_h = cv2.getWindowImageRect(win_name)
-    except Exception:
-        return frame
-
-    if win_w <= 0 or win_h <= 0:
-        return frame
-
-    fh, fw = frame.shape[:2]
-    scale  = min(win_w / fw, win_h / fh)
-    new_w  = int(fw * scale)
-    new_h  = int(fh * scale)
-
-    resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-    canvas  = np.zeros((win_h, win_w, 3), dtype=np.uint8)
-    x_off   = (win_w - new_w) // 2
-    y_off   = (win_h - new_h) // 2
-    canvas[y_off:y_off + new_h, x_off:x_off + new_w] = resized
-    return canvas
-
-
-def _draw_save_button(img: np.ndarray, pressed: bool = False) -> np.ndarray:
-    out   = img.copy()
-    color = (0, 180, 0) if not pressed else (0, 255, 80)
-    cv2.rectangle(out, (BTN_X, BTN_Y), (BTN_X + BTN_W, BTN_Y + BTN_H), color, -1)
-    cv2.rectangle(out, (BTN_X, BTN_Y), (BTN_X + BTN_W, BTN_Y + BTN_H), (255, 255, 255), 2)
-    cv2.putText(out, '[ Save ]', (BTN_X + 8, BTN_Y + 27),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-    return out
-
-
-def _placeholder(label: str) -> np.ndarray:
-    h, w = 480, 640
-    img  = np.zeros((h, w, 3), dtype=np.uint8)
-    cv2.putText(img, f'Waiting for {label}...', (20, h // 2),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (180, 180, 180), 2)
-    return img
-
-
-def _label(img: np.ndarray, text: str) -> np.ndarray:
-    out = img.copy()
-    cv2.putText(out, text, (10, img.shape[0] - 15),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-    return out
-
-
-def _in_button(x: int, y: int) -> bool:
-    return BTN_X <= x <= BTN_X + BTN_W and BTN_Y <= y <= BTN_Y + BTN_H
-
-
-# ── Mouse handler ─────────────────────────────────────────────────────────────
-
-class _MouseState:
-    def __init__(self):
-        self.clicked = False
-
-    def callback(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN and _in_button(x, y):
-            self.clicked = True
-
-
-# ── ROS Node ──────────────────────────────────────────────────────────────────
 
 class CameraViewerNode(Node):
     def __init__(self):
@@ -159,39 +37,56 @@ class CameraViewerNode(Node):
         if not self._show_lucid and not self._show_analog:
             raise RuntimeError("At least one of 'show_lucid' or 'show_analog' must be True")
 
-        self._lock         = threading.Lock()
+        self._bridge = CvBridge()
+        self._lock   = threading.Lock()
         self._frame_lucid  = None
         self._frame_analog = None
 
         os.makedirs(self._save_dir, exist_ok=True)
 
+        # Update save_dir to session_folder/saved_frames when session path is published
+        self.create_subscription(
+            String, '/tankervision/session_path', self._session_path_cb, _LATCHED_QOS)
+
         if self._show_lucid:
-            self.create_subscription(Image, LUCID_TOPIC, self._lucid_cb, _BEST_EFFORT_QOS)
-            self.get_logger().info(f'Subscribed to {LUCID_TOPIC}  (Lucid)')
+            self.create_subscription(Image, '/cam0/image_raw', self._lucid_cb,  10)
+            self.get_logger().info('Subscribed to /cam0/image_raw  (Lucid)')
 
         if self._show_analog:
-            self.create_subscription(Image, ANALOG_TOPIC, self._analog_cb, _BEST_EFFORT_QOS)
-            self.get_logger().info(f'Subscribed to {ANALOG_TOPIC}  (Analog)')
+            self.create_subscription(Image, '/cam1/image_raw', self._analog_cb, 10)
+            self.get_logger().info('Subscribed to /cam1/image_raw  (Analog)')
 
-        self.get_logger().info("Press 's' or click [ Save ] to save frames. 'q'/ESC to quit.")
+        self.get_logger().info("Press 's' to save frames, 'q' or ESC to quit")
 
-    def _lucid_cb(self, msg: Image):
+    # ── Session path ─────────────────────────────────────────────────────────
+
+    def _session_path_cb(self, msg: String):
+        new_dir = os.path.join(msg.data, 'saved_frames')
+        os.makedirs(new_dir, exist_ok=True)
+        self._save_dir = new_dir
+        self.get_logger().info(f'Saving frames to {new_dir}')
+
+    # ── Subscription callbacks ────────────────────────────────────────────────
+
+    def _lucid_cb(self, msg):
         try:
-            frame = imgmsg_to_bgr(msg)
-        except Exception as e:
-            self.get_logger().warn(f'Lucid decode error: {e}')
+            frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        except CvBridgeError as e:
+            self.get_logger().warn(f'Lucid bridge error: {e}')
             return
         with self._lock:
             self._frame_lucid = frame
 
-    def _analog_cb(self, msg: Image):
+    def _analog_cb(self, msg):
         try:
-            frame = imgmsg_to_bgr(msg)
-        except Exception as e:
-            self.get_logger().warn(f'Analog decode error: {e}')
+            frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        except CvBridgeError as e:
+            self.get_logger().warn(f'Analog bridge error: {e}')
             return
         with self._lock:
             self._frame_analog = frame
+
+    # ── Display ───────────────────────────────────────────────────────────────
 
     def get_frames(self):
         with self._lock:
@@ -199,9 +94,23 @@ class CameraViewerNode(Node):
             analog = self._frame_analog.copy() if self._frame_analog is not None else None
         return lucid, analog
 
+    def build_display(self, lucid, analog):
+        panels = []
+        if self._show_lucid:
+            frame = lucid if lucid is not None else _placeholder('Lucid')
+            panels.append(_resize_to_height(_label(frame, 'Lucid'), _DISPLAY_HEIGHT))
+        if self._show_analog:
+            frame = analog if analog is not None else _placeholder('Analog')
+            panels.append(_resize_to_height(_label(frame, 'Analog'), _DISPLAY_HEIGHT))
+
+        return panels[0] if len(panels) == 1 else np.hstack(panels)
+
+    # ── Save ──────────────────────────────────────────────────────────────────
+
     def save_frames(self, lucid, analog):
-        ts    = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
         saved = []
+
         if self._show_lucid:
             if lucid is not None:
                 path = os.path.join(self._save_dir, f'lucid_{ts}.png')
@@ -209,6 +118,7 @@ class CameraViewerNode(Node):
                 saved.append(path)
             else:
                 self.get_logger().warn('No Lucid frame to save yet')
+
         if self._show_analog:
             if analog is not None:
                 path = os.path.join(self._save_dir, f'analog_{ts}.png')
@@ -216,8 +126,30 @@ class CameraViewerNode(Node):
                 saved.append(path)
             else:
                 self.get_logger().warn('No Analog frame to save yet')
+
         for p in saved:
             self.get_logger().info(f'Saved: {p}')
+
+
+# ── Module-level helpers ──────────────────────────────────────────────────────
+
+def _placeholder(label: str) -> np.ndarray:
+    img = np.zeros((_DISPLAY_HEIGHT, 960, 3), dtype=np.uint8)
+    cv2.putText(img, f'Waiting for {label}...', (20, _DISPLAY_HEIGHT // 2),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (180, 180, 180), 2)
+    return img
+
+
+def _resize_to_height(img: np.ndarray, height: int) -> np.ndarray:
+    h, w = img.shape[:2]
+    return cv2.resize(img, (int(w * height / h), height))
+
+
+def _label(img: np.ndarray, text: str) -> np.ndarray:
+    out = img.copy()
+    cv2.putText(out, text, (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+    return out
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -229,64 +161,18 @@ def main(args=None):
     spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     spin_thread.start()
 
-    mouse_states = {}
-
-    if node._show_lucid:
-        cv2.namedWindow('Lucid Camera', cv2.WINDOW_NORMAL)
-        cv2.resizeWindow('Lucid Camera', 960, 540)
-        ms_lucid = _MouseState()
-        cv2.setMouseCallback('Lucid Camera', ms_lucid.callback)
-        mouse_states['lucid'] = ms_lucid
-
-    if node._show_analog:
-        cv2.namedWindow('Analog Camera', cv2.WINDOW_NORMAL)
-        cv2.resizeWindow('Analog Camera', 720, 480)
-        ms_analog = _MouseState()
-        cv2.setMouseCallback('Analog Camera', ms_analog.callback)
-        mouse_states['analog'] = ms_analog
-
-    save_flash = 0  # countdown: show button as "pressed" for N frames
+    cv2.namedWindow('Camera Viewer', cv2.WINDOW_NORMAL)
 
     try:
         while rclpy.ok():
             lucid, analog = node.get_frames()
-
-            # Check for save trigger (button click)
-            do_save = False
-            for ms in mouse_states.values():
-                if ms.clicked:
-                    ms.clicked = False
-                    do_save = True
-
-            if do_save:
-                node.save_frames(lucid, analog)
-                save_flash = 10
-
-            pressed = save_flash > 0
-            if save_flash > 0:
-                save_flash -= 1
-
-            # Lucid window
-            if node._show_lucid:
-                frame = _label(lucid if lucid is not None else _placeholder('Lucid'), 'Lucid')
-                frame = _fit_to_window(frame, 'Lucid Camera')
-                frame = _draw_save_button(frame, pressed)
-                cv2.imshow('Lucid Camera', frame)
-
-            # Analog window
-            if node._show_analog:
-                frame = _label(analog if analog is not None else _placeholder('Analog'), 'Analog')
-                frame = _fit_to_window(frame, 'Analog Camera')
-                frame = _draw_save_button(frame, pressed)
-                cv2.imshow('Analog Camera', frame)
+            cv2.imshow('Camera Viewer', node.build_display(lucid, analog))
 
             key = cv2.waitKey(30) & 0xFF
             if key == ord('s'):
                 node.save_frames(lucid, analog)
-                save_flash = 10
-            elif key in (ord('q'), 27):
+            elif key in (ord('q'), 27):  # q or ESC
                 break
-
     finally:
         cv2.destroyAllWindows()
         node.destroy_node()
