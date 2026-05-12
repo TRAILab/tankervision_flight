@@ -530,11 +530,25 @@ class StatusNode(Node):
 
     # ─── Cellular Status ─────────────────────────────────────────────────────
     def _detect_at_port(self) -> str:
-        """Probe all ttyUSB ports and return the first that responds to AT."""
+        """Probe ttyUSB ports for a cellular modem AT interface.
+        Excludes ports already claimed by known sensors (IM19, GNSS).
+        """
         import serial
         import glob
+
+        # Resolve real device paths for known sensor symlinks to exclude them
+        excluded = set()
+        for link in ('/dev/im19_mems', '/dev/im19_navi', '/dev/im19_gnss', '/dev/gnss'):
+            try:
+                excluded.add(os.path.realpath(link))
+            except Exception:
+                pass
+
         ports = sorted(glob.glob('/dev/ttyUSB*'))
         for port in ports:
+            if os.path.realpath(port) in excluded:
+                _py_logger.info(f'Skipping {port} (known sensor symlink)')
+                continue
             try:
                 with serial.Serial(port, 115200, timeout=1) as s:
                     s.write(b'AT\r\n')
