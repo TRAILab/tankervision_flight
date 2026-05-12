@@ -73,13 +73,12 @@ sudo nmcli connection up "$CAMERA_IFACE" || true
 
 echo "[install] Enabling services..."
 sudo systemctl daemon-reload
+sudo systemctl disable --now gpsd.service chrony 2>/dev/null || true
 sudo systemctl disable gpsd.socket || true
 sudo systemctl mask gpsd.socket || true
 for SVC in \
-    gpsd.service \
-    chrony \
-    ptp4l.service \
     gpsd-chrony.service \
+    ptp4l.service \
     tankervision.service \
     gnss-record.service
 do

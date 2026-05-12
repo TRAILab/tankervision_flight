@@ -1,6 +1,8 @@
 [Unit]
-Description=Restart gpsd and chronyd services
+Description=Start gpsd and chronyd in controlled order
 After=network.target
+Before=ptp4l.service tankervision.service
+Conflicts=gpsd.service chrony.service
 
 [Service]
 Type=oneshot

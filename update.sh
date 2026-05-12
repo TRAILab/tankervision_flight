@@ -109,13 +109,14 @@ done
 # ── 3. Reload systemd ─────────────────────────────────────────────
 info "Reloading systemd..."
 systemctl daemon-reload
+systemctl disable --now gpsd.service chrony 2>/dev/null || true
+systemctl disable gpsd.socket || true
+systemctl mask gpsd.socket || true
 
 # Services that must always be enabled
 for SVC in \
-    gpsd.service \
-    chrony \
-    ptp4l.service \
     gpsd-chrony.service \
+    ptp4l.service \
     tankervision.service \
     gnss-record.service
 do
@@ -142,10 +143,8 @@ restart_svc() {
     fi
 }
 
-restart_svc chrony
-restart_svc gpsd.service
-restart_svc ptp4l.service
 restart_svc gpsd-chrony.service
+restart_svc ptp4l.service
 
 # ── 5. Rebuild ROS2 workspace ─────────────────────────────────────
 info "Building ROS2 workspace..."
@@ -169,10 +168,8 @@ restart_svc gnss-record.service
 echo ""
 info "Done. Active service status:"
 for SVC in \
-    chrony \
-    gpsd.service \
-    ptp4l.service \
     gpsd-chrony.service \
+    ptp4l.service \
     tankervision.service \
     gnss-record.service
 do

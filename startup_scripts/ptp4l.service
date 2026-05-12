@@ -1,7 +1,7 @@
 [Unit]
 Description=PTP4L - Precision Time Protocol Master
-After=network.target chrony.service
-Requires=chrony.service
+After=network.target gpsd-chrony.service
+Requires=gpsd-chrony.service
 
 [Service]
 Type=simple

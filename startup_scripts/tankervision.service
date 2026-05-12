@@ -1,6 +1,6 @@
 [Unit]
 Description=TankerVision ROS2 Flight Launch
-After=network.target ptp4l.service chrony.service mnt-storage.mount
+After=network.target gpsd-chrony.service ptp4l.service mnt-storage.mount
 Requires=ptp4l.service mnt-storage.mount
 
 
