@@ -1,12 +1,17 @@
 [Unit]
 Description=Mount USB SSD storage pool after USB settles
-After=multi-user.target systemd-udev-settle.service
+After=systemd-udev-settle.service
 Wants=systemd-udev-settle.service
+Before=tankervision.service gnss-record.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/mount-storage-pool.sh
 RemainAfterExit=yes
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=140
 
 [Install]
 WantedBy=multi-user.target
