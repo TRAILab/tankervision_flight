@@ -54,8 +54,8 @@ maxvis_recording:
   record_fps: 1.0
 
 yolo:
-  model: src/tanker_vision/tanker_vision/fire_detection.pt
-  fire_class: 2
+  model: src/tanker_vision/tanker_vision/base_yolo.pt
+  target_class: 10
   confidence: 0.3
  
 ptp:
@@ -66,5 +66,5 @@ gpsd_velocity:
   publish_rate_hz: 1.0
 
 velocity:
-  takeoff_threshold_m_s: 14.0
-  landing_threshold_m_s: 1.0
+  takeoff_threshold_m_s: 5.0
+  landing_threshold_m_s: 0.5

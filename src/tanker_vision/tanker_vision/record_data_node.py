@@ -62,7 +62,7 @@ class RecordDataNode(Node):
         model_path  = (raw_model if os.path.isabs(raw_model)
                        else os.path.join(repo_root, raw_model))
 
-        self._fire_class   = int(yolo_cfg.get('fire_class', 2))
+        self._target_class = int(yolo_cfg.get('target_class', yolo_cfg.get('fire_class', 2)))
         self._confidence   = float(yolo_cfg.get('confidence', 0.3))
         self._timeout_sec  = float(trigger_cfg.get('timeout_sec', 20.0))
 
@@ -109,7 +109,8 @@ class RecordDataNode(Node):
         self.create_timer(60.0, self._publish_standby_heartbeat)
         self.get_logger().info(
             f'RecordDataNode started | model={model_path} '
-            f'conf={self._confidence} class={self._fire_class}'
+            f'conf={self._confidence} class={self._target_class} '
+            f'timeout={self._timeout_sec}s'
         )
 
     def _publish_status(self, status: str):
@@ -132,14 +133,14 @@ class RecordDataNode(Node):
             verbose=False,
         )
 
-        fire_detected = False
+        target_detected = False
         if results and hasattr(results[0], 'boxes'):
             for box in results[0].boxes:
-                if int(box.cls[0]) == self._fire_class:
-                    fire_detected = True
+                if int(box.cls[0]) == self._target_class:
+                    target_detected = True
                     break
 
-        if fire_detected:
+        if target_detected:
             self._trigger_pub.publish(Empty())
             self._start_or_extend_recording()
 
@@ -153,7 +154,9 @@ class RecordDataNode(Node):
         self._is_recording  = True
         self._recording_end = now + self._timeout_sec
         self._publish_camera_record_mode('record')
-        self.get_logger().info('Fire detected: camera raw recording requested')
+        self.get_logger().info(
+            f'YOLO class {self._target_class} detected: camera raw recording requested'
+        )
 
     def _check_recording_status(self):
         self._publish_status('RECORDING' if self._is_recording else 'SCANNING')
