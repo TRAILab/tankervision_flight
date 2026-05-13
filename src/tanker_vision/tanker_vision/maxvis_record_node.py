@@ -155,6 +155,7 @@ class MaxvisRecordNode(Node):
             '-o', bag_path,
             '/cam1/image_throttled',
             '/im19/imu',
+            '/cam0/image_raw',
             '--compression-mode', 'message',
             '--compression-format', 'zstd',
         ]
