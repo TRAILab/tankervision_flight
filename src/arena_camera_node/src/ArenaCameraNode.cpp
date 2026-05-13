@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include "rmw/types.h"
@@ -363,7 +364,8 @@ void ArenaCameraNode::run_()
   m_pDevice.reset(device);
   set_nodes_();
   m_pDevice->StartStream();
-  std::thread(&ArenaCameraNode::publish_images_, this).detach();
+  publish_worker_thread_ = std::thread(&ArenaCameraNode::resize_and_publish_worker_, this);
+  acquisition_thread_ = std::thread(&ArenaCameraNode::publish_images_, this);
 }
 
 builtin_interfaces::msg::Time ArenaCameraNode::timestamp_from_image_(
@@ -439,10 +441,11 @@ void ArenaCameraNode::save_raw_image_(Arena::IImage* pImage)
 void ArenaCameraNode::publish_images_()
 {
   Arena::IImage* pImage = nullptr;
-  while (rclcpp::ok()) {
+  while (rclcpp::ok() && running_.load(std::memory_order_acquire)) {
     try {
       pImage = m_pDevice->GetImage(1000);
       const auto image_stamp = timestamp_from_image_(pImage);
+      const std::string frame_id = std::to_string(pImage->GetFrameId());
 
       if (record_raw_.load(std::memory_order_acquire)) {
         try {
@@ -474,36 +477,20 @@ void ArenaCameraNode::publish_images_()
             CV_8UC3,
             const_cast<uint8_t*>(converted->GetData()));
 
-        cv::Mat bgr_downscaled;
-        cv::resize(
-            bgr, bgr_downscaled,
-            cv::Size(
-                static_cast<int>(conv_width / 8),
-                static_cast<int>(conv_height / 8)),
-            0.0, 0.0, cv::INTER_AREA);
+        PublishFrame frame;
+        frame.stamp = image_stamp;
+        frame.frame_id = frame_id;
+        frame.width = conv_width;
+        frame.height = conv_height;
+        const size_t img_data_size = bgr.total() * bgr.elemSize();
+        frame.bgr.resize(img_data_size);
+        std::memcpy(frame.bgr.data(), bgr.data, img_data_size);
 
-        auto p_image_msg = std::make_unique<sensor_msgs::msg::Image>();
-        p_image_msg->header.stamp    = image_stamp;
-        p_image_msg->header.frame_id = std::to_string(pImage->GetFrameId());
-        p_image_msg->height   = bgr_downscaled.rows;
-        p_image_msg->width    = bgr_downscaled.cols;
-        p_image_msg->encoding = sensor_msgs::image_encodings::BGR8;
-        p_image_msg->is_bigendian = 0;
-        p_image_msg->step = static_cast<sensor_msgs::msg::Image::_step_type>(bgr_downscaled.step);
-        const size_t img_data_size = bgr_downscaled.total() * bgr_downscaled.elemSize();
-        p_image_msg->data.resize(img_data_size);
-        std::memcpy(p_image_msg->data.data(), bgr_downscaled.data, img_data_size);
-
-        m_pub_->publish(std::move(p_image_msg));
-        {
-          std_msgs::msg::String hb;
-          hb.data = "heartbeat";
-          heartbeat_pub_->publish(hb);
-        }
         Arena::ImageFactory::Destroy(converted);
         converted = nullptr;
         m_pDevice->RequeueBuffer(pImage);
         pImage = nullptr;
+        enqueue_publish_frame_(std::move(frame));
       } catch (...) {
         if (converted) {
           Arena::ImageFactory::Destroy(converted);
@@ -542,6 +529,74 @@ void ArenaCameraNode::publish_images_()
       log_warn("Unknown exception occurred while publishing an image");
       continue;
     }
+  }
+}
+
+void ArenaCameraNode::enqueue_publish_frame_(PublishFrame frame)
+{
+  {
+    std::lock_guard<std::mutex> lock(publish_queue_mutex_);
+    while (publish_queue_.size() >= kMaxPublishQueueSize) {
+      publish_queue_.pop_front();
+    }
+    publish_queue_.push_back(std::move(frame));
+  }
+  publish_queue_cv_.notify_one();
+}
+
+void ArenaCameraNode::resize_and_publish_worker_()
+{
+  while (true) {
+    PublishFrame frame;
+    {
+      std::unique_lock<std::mutex> lock(publish_queue_mutex_);
+      publish_queue_cv_.wait(lock, [this]() {
+        return !publish_queue_.empty() || !running_.load(std::memory_order_acquire) || !rclcpp::ok();
+      });
+      if (publish_queue_.empty()) {
+        if (!running_.load(std::memory_order_acquire) || !rclcpp::ok()) {
+          break;
+        }
+        continue;
+      }
+      frame = std::move(publish_queue_.front());
+      publish_queue_.pop_front();
+    }
+
+    if (frame.bgr.empty() || frame.width == 0 || frame.height == 0) {
+      continue;
+    }
+
+    cv::Mat bgr(
+        static_cast<int>(frame.height),
+        static_cast<int>(frame.width),
+        CV_8UC3,
+        frame.bgr.data());
+
+    cv::Mat bgr_downscaled;
+    cv::resize(
+        bgr, bgr_downscaled,
+        cv::Size(
+            static_cast<int>(frame.width / 8),
+            static_cast<int>(frame.height / 8)),
+        0.0, 0.0, cv::INTER_AREA);
+
+    auto p_image_msg = std::make_unique<sensor_msgs::msg::Image>();
+    p_image_msg->header.stamp    = frame.stamp;
+    p_image_msg->header.frame_id = frame.frame_id;
+    p_image_msg->height   = bgr_downscaled.rows;
+    p_image_msg->width    = bgr_downscaled.cols;
+    p_image_msg->encoding = sensor_msgs::image_encodings::BGR8;
+    p_image_msg->is_bigendian = 0;
+    p_image_msg->step = static_cast<sensor_msgs::msg::Image::_step_type>(bgr_downscaled.step);
+    const size_t img_data_size = bgr_downscaled.total() * bgr_downscaled.elemSize();
+    p_image_msg->data.resize(img_data_size);
+    std::memcpy(p_image_msg->data.data(), bgr_downscaled.data, img_data_size);
+
+    m_pub_->publish(std::move(p_image_msg));
+    std_msgs::msg::String hb;
+    hb.data = "heartbeat";
+    heartbeat_pub_->publish(hb);
   }
 }
 

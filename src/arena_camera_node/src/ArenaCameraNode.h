@@ -8,11 +8,14 @@
 
 // std
 #include <atomic>
+#include <condition_variable>
 #include <cstdio>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 // ROS
@@ -42,6 +45,14 @@ class ArenaCameraNode : public rclcpp::Node
 
   ~ArenaCameraNode()
   {
+    running_.store(false, std::memory_order_release);
+    publish_queue_cv_.notify_all();
+    if (acquisition_thread_.joinable()) {
+      acquisition_thread_.join();
+    }
+    if (publish_worker_thread_.joinable()) {
+      publish_worker_thread_.join();
+    }
     log_info(std::string("Destroying \"") + this->get_name() + "\" node");
   }
 
@@ -91,6 +102,20 @@ class ArenaCameraNode : public rclcpp::Node
 
   // Publishing
   std::string topic_;
+  struct PublishFrame {
+    builtin_interfaces::msg::Time stamp;
+    std::string frame_id;
+    size_t width{0};
+    size_t height{0};
+    std::vector<uint8_t> bgr;
+  };
+  std::atomic<bool> running_{true};
+  std::thread acquisition_thread_;
+  std::thread publish_worker_thread_;
+  std::mutex publish_queue_mutex_;
+  std::condition_variable publish_queue_cv_;
+  std::deque<PublishFrame> publish_queue_;
+  static constexpr size_t kMaxPublishQueueSize = 2;
 
   // ROI
   size_t width_{0};
@@ -156,6 +181,8 @@ class ArenaCameraNode : public rclcpp::Node
 
   // Main acquisition pipeline
   void publish_images_();
+  void resize_and_publish_worker_();
+  void enqueue_publish_frame_(PublishFrame frame);
 
   // Raw recording
   void record_mode_callback_(const std_msgs::msg::String::SharedPtr msg);
