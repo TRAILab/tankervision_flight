@@ -25,6 +25,7 @@
 #include <rclcpp/timer.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <opencv2/core.hpp>
 
 // Arena SDK
 #include "ArenaApi.h"
@@ -183,6 +184,7 @@ class ArenaCameraNode : public rclcpp::Node
   void publish_images_();
   void resize_and_publish_worker_();
   void enqueue_publish_frame_(PublishFrame frame);
+  cv::Mat resize_with_vpi_vic_(const PublishFrame& frame);
 
   // Raw recording
   void record_mode_callback_(const std_msgs::msg::String::SharedPtr msg);

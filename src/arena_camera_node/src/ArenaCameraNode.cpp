@@ -11,6 +11,11 @@
 #include <utility>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
+#include <vpi/OpenCVInterop.hpp>
+#include <vpi/Status.h>
+#include <vpi/Stream.h>
+#include <vpi/algo/ConvertImageFormat.h>
+#include <vpi/algo/Rescale.h>
 #include "rmw/types.h"
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/image_encodings.hpp>
@@ -19,6 +24,59 @@
 #include "light_arena/deviceinfo_helper.h"
 #include "rclcpp_adapter/pixelformat_translation.h"
 #include "rclcpp_adapter/quilty_of_service_translation.cpp"
+
+namespace
+{
+void check_vpi_status(VPIStatus status, const char* statement)
+{
+  if (status == VPI_SUCCESS) {
+    return;
+  }
+
+  char buffer[VPI_MAX_STATUS_MESSAGE_LENGTH] = {};
+  vpiGetLastStatusMessage(buffer, sizeof(buffer));
+  std::ostringstream ss;
+  ss << statement << " failed: " << vpiStatusGetName(status);
+  if (buffer[0] != '\0') {
+    ss << ": " << buffer;
+  }
+  throw std::runtime_error(ss.str());
+}
+
+#define CHECK_VPI(STMT) check_vpi_status((STMT), #STMT)
+
+struct VpiStreamGuard {
+  VPIStream stream{nullptr};
+  ~VpiStreamGuard()
+  {
+    if (stream) {
+      vpiStreamSync(stream);
+      vpiStreamDestroy(stream);
+    }
+  }
+};
+
+struct VpiImageGuard {
+  VPIImage image{nullptr};
+  ~VpiImageGuard()
+  {
+    if (image) {
+      vpiImageDestroy(image);
+    }
+  }
+};
+
+struct VpiImageLockGuard {
+  VPIImage image{nullptr};
+  bool locked{false};
+  ~VpiImageLockGuard()
+  {
+    if (locked && image) {
+      vpiImageUnlock(image);
+    }
+  }
+};
+}  // namespace
 
 void ArenaCameraNode::parse_parameters_()
 {
@@ -567,19 +625,13 @@ void ArenaCameraNode::resize_and_publish_worker_()
       continue;
     }
 
-    cv::Mat bgr(
-        static_cast<int>(frame.height),
-        static_cast<int>(frame.width),
-        CV_8UC3,
-        frame.bgr.data());
-
     cv::Mat bgr_downscaled;
-    cv::resize(
-        bgr, bgr_downscaled,
-        cv::Size(
-            static_cast<int>(frame.width / 8),
-            static_cast<int>(frame.height / 8)),
-        0.0, 0.0, cv::INTER_AREA);
+    try {
+      bgr_downscaled = resize_with_vpi_vic_(frame);
+    } catch (const std::exception& e) {
+      log_warn(std::string("VPI VIC resize failed: ") + e.what());
+      continue;
+    }
 
     auto p_image_msg = std::make_unique<sensor_msgs::msg::Image>();
     p_image_msg->header.stamp    = frame.stamp;
@@ -598,6 +650,64 @@ void ArenaCameraNode::resize_and_publish_worker_()
     hb.data = "heartbeat";
     heartbeat_pub_->publish(hb);
   }
+}
+
+cv::Mat ArenaCameraNode::resize_with_vpi_vic_(const PublishFrame& frame)
+{
+  const int input_width = static_cast<int>(frame.width);
+  const int input_height = static_cast<int>(frame.height);
+  const int output_width = input_width / 8;
+  const int output_height = input_height / 8;
+
+  cv::Mat input_bgr(input_height, input_width, CV_8UC3, const_cast<uint8_t*>(frame.bgr.data()));
+  cv::Mat output_bgr(output_height, output_width, CV_8UC3);
+
+  VpiStreamGuard stream;
+  CHECK_VPI(vpiStreamCreate(VPI_BACKEND_VIC, &stream.stream));
+
+  VpiImageGuard input_bgr_vpi;
+  CHECK_VPI(vpiImageCreateWrapperOpenCVMat(
+      input_bgr, VPI_IMAGE_FORMAT_BGR8, VPI_BACKEND_VIC, &input_bgr_vpi.image));
+
+  VpiImageGuard input_bgra_vpi;
+  CHECK_VPI(vpiImageCreate(
+      input_width, input_height, VPI_IMAGE_FORMAT_BGRA8, VPI_BACKEND_VIC, &input_bgra_vpi.image));
+
+  VpiImageGuard output_bgra_vpi;
+  CHECK_VPI(vpiImageCreate(
+      output_width, output_height, VPI_IMAGE_FORMAT_BGRA8, VPI_BACKEND_VIC, &output_bgra_vpi.image));
+
+  VpiImageGuard output_bgr_vpi;
+  CHECK_VPI(vpiImageCreate(
+      output_width, output_height, VPI_IMAGE_FORMAT_BGR8, VPI_BACKEND_VIC, &output_bgr_vpi.image));
+
+  CHECK_VPI(vpiSubmitConvertImageFormat(
+      stream.stream, VPI_BACKEND_VIC, input_bgr_vpi.image, input_bgra_vpi.image, nullptr));
+
+  CHECK_VPI(vpiSubmitRescale(
+      stream.stream,
+      VPI_BACKEND_VIC,
+      input_bgra_vpi.image,
+      output_bgra_vpi.image,
+      VPI_INTERP_LINEAR,
+      VPI_BORDER_CLAMP,
+      0));
+
+  CHECK_VPI(vpiSubmitConvertImageFormat(
+      stream.stream, VPI_BACKEND_VIC, output_bgra_vpi.image, output_bgr_vpi.image, nullptr));
+
+  CHECK_VPI(vpiStreamSync(stream.stream));
+  VPIImageData output_data = {};
+  CHECK_VPI(vpiImageLockData(
+      output_bgr_vpi.image, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &output_data));
+  VpiImageLockGuard output_lock;
+  output_lock.image = output_bgr_vpi.image;
+  output_lock.locked = true;
+
+  cv::Mat output_view;
+  CHECK_VPI(vpiImageDataExportOpenCVMat(output_data, &output_view));
+  output_view.copyTo(output_bgr);
+  return output_bgr;
 }
 
 void ArenaCameraNode::publish_camera_diagnostics_()
