@@ -1,7 +1,7 @@
 [Unit]
 Description=GNSS Raw Data Recorder
-After=mnt-storage.mount
-Requires=mnt-storage.mount
+After=storage-pool.service tankervision.service
+Requires=storage-pool.service
 
 [Service]
 Type=simple

@@ -31,6 +31,15 @@ info "Camera interface: $CAMERA_IFACE"
 # ── 1. Deploy configs ─────────────────────────────────────────────
 info "Deploying configs..."
 
+info "Disabling fstab-managed storage pool mounts..."
+cp /etc/fstab /etc/fstab.tankervision-storage.bak
+sed -i -E \
+    -e '/^[[:space:]]*UUID=(3083-C6EC|C4C6-7FCD|58D2-4F5D)[[:space:]]/ s/^/# tankervision storage-pool manages this: /' \
+    -e '/^[[:space:]]*\/mnt\/hdd0:\/mnt\/hdd1:\/mnt\/hdd2[[:space:]]+\/mnt\/storage[[:space:]]+mergerfs[[:space:]]/ s/^/# tankervision storage-pool manages this: /' \
+    /etc/fstab
+command -v mergerfs >/dev/null || warn "  mergerfs is not installed — run install.sh or install mergerfs"
+command -v fsck.exfat >/dev/null || warn "  exfatprogs is not installed — run install.sh or install exfatprogs"
+
 cp_config() {
     local SRC="$1" DST="$2"
     if [[ -f "$SRC" ]]; then
@@ -79,6 +88,10 @@ if [[ -f "$REPO_DIR/startup_scripts/gpsd-chrony-restart.sh" ]]; then
     cp "$REPO_DIR/startup_scripts/gpsd-chrony-restart.sh" /usr/local/bin/gpsd-chrony-restart.sh
     chmod +x /usr/local/bin/gpsd-chrony-restart.sh
 fi
+if [[ -f "$REPO_DIR/startup_scripts/mount-storage-pool.sh" ]]; then
+    cp "$REPO_DIR/startup_scripts/mount-storage-pool.sh" /usr/local/sbin/mount-storage-pool.sh
+    chmod +x /usr/local/sbin/mount-storage-pool.sh
+fi
 info "  helper scripts"
 
 # ── 2. Deploy systemd services ────────────────────────────────────
@@ -95,8 +108,15 @@ cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/tankervi
 sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/tankervision.service
 info "  tankervision.service (user: $CURRENT_USER)"
 
+sudo -u "$CURRENT_USER" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$CURRENT_USER")/bus" \
+    gsettings set org.gnome.desktop.media-handling automount false 2>/dev/null || \
+    warn "  desktop automount disable skipped"
+sudo -u "$CURRENT_USER" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$CURRENT_USER")/bus" \
+    gsettings set org.gnome.desktop.media-handling automount-open false 2>/dev/null || true
+
 # remaining active services — copy as-is
 for SVC in \
+    storage-pool.service \
     gpsd-chrony.service \
     gnss-record.service
 do
@@ -115,6 +135,7 @@ systemctl mask gpsd.socket || true
 
 # Services that must always be enabled
 for SVC in \
+    storage-pool.service \
     gpsd-chrony.service \
     ptp4l.service \
     tankervision.service \
@@ -145,6 +166,8 @@ restart_svc() {
 
 restart_svc gpsd-chrony.service
 restart_svc ptp4l.service
+systemctl stop tankervision.service gnss-record.service 2>/dev/null || true
+restart_svc storage-pool.service
 
 # ── 5. Rebuild ROS2 workspace ─────────────────────────────────────
 info "Building ROS2 workspace..."
@@ -176,6 +199,7 @@ restart_svc gnss-record.service
 echo ""
 info "Done. Active service status:"
 for SVC in \
+    storage-pool.service \
     gpsd-chrony.service \
     ptp4l.service \
     tankervision.service \
