@@ -1,5 +1,6 @@
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -9,17 +10,12 @@
 #include <string>
 #include <thread>
 #include <utility>
-#include <opencv2/core.hpp>
-#include <opencv2/imgproc.hpp>
-#include <vpi/OpenCVInterop.hpp>
-#include <vpi/Status.h>
-#include <vpi/Stream.h>
-#include <vpi/algo/Rescale.h>
 #include "rmw/types.h"
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <std_msgs/msg/string.hpp>
 #include "ArenaCameraNode.h"
+#include "bayer_downscale_cuda.h"
 #include "light_arena/deviceinfo_helper.h"
 #include "rclcpp_adapter/pixelformat_translation.h"
 #include "rclcpp_adapter/quilty_of_service_translation.cpp"
@@ -31,55 +27,6 @@ double elapsed_ms(std::chrono::steady_clock::time_point start, std::chrono::stea
   return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
-void check_vpi_status(VPIStatus status, const char* statement)
-{
-  if (status == VPI_SUCCESS) {
-    return;
-  }
-
-  char buffer[VPI_MAX_STATUS_MESSAGE_LENGTH] = {};
-  vpiGetLastStatusMessage(buffer, sizeof(buffer));
-  std::ostringstream ss;
-  ss << statement << " failed: " << vpiStatusGetName(status);
-  if (buffer[0] != '\0') {
-    ss << ": " << buffer;
-  }
-  throw std::runtime_error(ss.str());
-}
-
-#define CHECK_VPI(STMT) check_vpi_status((STMT), #STMT)
-
-struct VpiStreamGuard {
-  VPIStream stream{nullptr};
-  ~VpiStreamGuard()
-  {
-    if (stream) {
-      vpiStreamSync(stream);
-      vpiStreamDestroy(stream);
-    }
-  }
-};
-
-struct VpiImageGuard {
-  VPIImage image{nullptr};
-  ~VpiImageGuard()
-  {
-    if (image) {
-      vpiImageDestroy(image);
-    }
-  }
-};
-
-struct VpiImageLockGuard {
-  VPIImage image{nullptr};
-  bool locked{false};
-  ~VpiImageLockGuard()
-  {
-    if (locked && image) {
-      vpiImageUnlock(image);
-    }
-  }
-};
 }  // namespace
 
 void ArenaCameraNode::parse_parameters_()
@@ -139,6 +86,9 @@ void ArenaCameraNode::parse_parameters_()
 
     nextParameterToDeclare = "raw_save_root";
     raw_save_root_ = this->declare_parameter<std::string>("raw_save_root", "/mnt/storage");
+
+    nextParameterToDeclare = "bayer_raw_shift";
+    bayer_raw_shift_ = this->declare_parameter<int>("bayer_raw_shift", 8);
 
   } catch (rclcpp::ParameterTypeException& e) {
     log_err(nextParameterToDeclare + " argument");
@@ -533,55 +483,47 @@ void ArenaCameraNode::publish_images_()
             ", expected 5320x4600");
       }
 
-      Arena::IImage* converted = nullptr;
-      try {
-        const auto convert_start = std::chrono::steady_clock::now();
-        converted = Arena::ImageFactory::Convert(pImage, PfncFormat::BGRa8);
-        const auto convert_end = std::chrono::steady_clock::now();
-        const size_t conv_width  = converted->GetWidth();
-        const size_t conv_height = converted->GetHeight();
+      const uint64_t bits_per_pixel = pImage->GetBitsPerPixel();
+      if (bits_per_pixel != 16) {
+        log_warn(
+            "Unexpected raw image depth: " + std::to_string(bits_per_pixel) +
+            " bpp, expected 16 bpp BayerRG");
+      }
 
-        cv::Mat bgra(
-            static_cast<int>(conv_height),
-            static_cast<int>(conv_width),
-            CV_8UC4,
-            const_cast<uint8_t*>(converted->GetData()));
+      const void* image_data = pImage->GetData();
+      if (!image_data) {
+        throw std::runtime_error("Arena image data pointer is null");
+      }
 
-        PublishFrame frame;
-        frame.stamp = image_stamp;
-        frame.frame_id = frame_id;
-        frame.width = conv_width;
-        frame.height = conv_height;
-        frame.get_image_ms = get_image_ms;
-        frame.raw_save_ms = raw_save_ms;
-        frame.arena_convert_ms = elapsed_ms(convert_start, convert_end);
-        const size_t img_data_size = bgra.total() * bgra.elemSize();
-        const auto copy_start = std::chrono::steady_clock::now();
-        frame.bgra.resize(img_data_size);
-        std::memcpy(frame.bgra.data(), bgra.data, img_data_size);
-        frame.full_frame_copy_ms = elapsed_ms(copy_start, std::chrono::steady_clock::now());
-        frame.queued_at = std::chrono::steady_clock::now();
+      PublishFrame frame;
+      frame.stamp = image_stamp;
+      frame.frame_id = frame_id;
+      frame.width = width;
+      frame.height = height;
+      frame.get_image_ms = get_image_ms;
+      frame.raw_save_ms = raw_save_ms;
 
-        Arena::ImageFactory::Destroy(converted);
-        converted = nullptr;
-        m_pDevice->RequeueBuffer(pImage);
-        pImage = nullptr;
-        enqueue_publish_frame_(std::move(frame));
-        const uint64_t frame_count = timing_frame_count_.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (frame_count % 30 == 0) {
-          log_info(
-              "Camera timing frame " + std::to_string(frame_count) +
-              " | get=" + std::to_string(get_image_ms) + " ms" +
-              " raw_save=" + std::to_string(raw_save_ms) + " ms" +
-              " arena_convert=" + std::to_string(elapsed_ms(convert_start, convert_end)) + " ms" +
-              " full_copy=" + std::to_string(frame.full_frame_copy_ms) + " ms");
-        }
-      } catch (...) {
-        if (converted) {
-          Arena::ImageFactory::Destroy(converted);
-          converted = nullptr;
-        }
-        throw;
+      const auto copy_start = std::chrono::steady_clock::now();
+      const size_t pixel_count = width * height;
+      frame.bayer.resize(pixel_count);
+      std::memcpy(
+          frame.bayer.data(),
+          reinterpret_cast<const uint16_t*>(image_data),
+          pixel_count * sizeof(uint16_t));
+      frame.raw_copy_ms = elapsed_ms(copy_start, std::chrono::steady_clock::now());
+      const double raw_copy_ms = frame.raw_copy_ms;
+      frame.queued_at = std::chrono::steady_clock::now();
+
+      m_pDevice->RequeueBuffer(pImage);
+      pImage = nullptr;
+      enqueue_publish_frame_(std::move(frame));
+      const uint64_t frame_count = timing_frame_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+      if (frame_count % 30 == 0) {
+        log_info(
+            "Camera timing frame " + std::to_string(frame_count) +
+            " | get=" + std::to_string(get_image_ms) + " ms" +
+            " raw_save=" + std::to_string(raw_save_ms) + " ms" +
+            " raw_copy=" + std::to_string(raw_copy_ms) + " ms");
       }
     } catch (const GenICam::GenericException& e) {
       if (pImage) {
@@ -648,21 +590,37 @@ void ArenaCameraNode::resize_and_publish_worker_()
       publish_queue_.pop_front();
     }
 
-    if (frame.bgra.empty() || frame.width == 0 || frame.height == 0) {
+    if (frame.bayer.empty() || frame.width == 0 || frame.height == 0) {
       continue;
     }
 
     const auto dequeue_time = std::chrono::steady_clock::now();
     const double queue_wait_ms = elapsed_ms(frame.queued_at, dequeue_time);
 
-    cv::Mat bgr_downscaled;
-    double vpi_resize_ms = 0.0;
-    try {
-      const auto resize_start = std::chrono::steady_clock::now();
-      bgr_downscaled = resize_with_vpi_vic_(frame);
-      vpi_resize_ms = elapsed_ms(resize_start, std::chrono::steady_clock::now());
-    } catch (const std::exception& e) {
-      log_warn(std::string("VPI VIC resize failed: ") + e.what());
+    const size_t output_width = frame.width / kPublishDownscaleFactor;
+    const size_t output_height = frame.height / kPublishDownscaleFactor;
+    if (output_width == 0 || output_height == 0) {
+      log_warn(
+          "Skipping image with invalid downscaled size from " +
+          std::to_string(frame.width) + "x" + std::to_string(frame.height));
+      continue;
+    }
+
+    std::vector<uint8_t> bgr_downscaled(output_width * output_height * 3U);
+    std::string cuda_error;
+    const auto cuda_start = std::chrono::steady_clock::now();
+    const bool cuda_ok = bayer_rggb16_downscale8_to_bgr8_cuda(
+        frame.bayer.data(),
+        static_cast<int>(frame.width),
+        static_cast<int>(frame.height),
+        bgr_downscaled.data(),
+        static_cast<int>(output_width),
+        static_cast<int>(output_height),
+        bayer_raw_shift_,
+        &cuda_error);
+    const double cuda_process_ms = elapsed_ms(cuda_start, std::chrono::steady_clock::now());
+    if (!cuda_ok) {
+      log_warn("CUDA Bayer downscale failed: " + cuda_error);
       continue;
     }
 
@@ -670,15 +628,14 @@ void ArenaCameraNode::resize_and_publish_worker_()
     auto p_image_msg = std::make_unique<sensor_msgs::msg::Image>();
     p_image_msg->header.stamp    = frame.stamp;
     p_image_msg->header.frame_id = frame.frame_id;
-    p_image_msg->height   = bgr_downscaled.rows;
-    p_image_msg->width    = bgr_downscaled.cols;
+    p_image_msg->height   = static_cast<sensor_msgs::msg::Image::_height_type>(output_height);
+    p_image_msg->width    = static_cast<sensor_msgs::msg::Image::_width_type>(output_width);
     p_image_msg->encoding = sensor_msgs::image_encodings::BGR8;
     p_image_msg->is_bigendian = 0;
-    p_image_msg->step = static_cast<sensor_msgs::msg::Image::_step_type>(bgr_downscaled.step);
-    const size_t img_data_size = bgr_downscaled.total() * bgr_downscaled.elemSize();
-    p_image_msg->data.resize(img_data_size);
-    std::memcpy(p_image_msg->data.data(), bgr_downscaled.data, img_data_size);
-    const double ros_msg_copy_ms = elapsed_ms(msg_start, std::chrono::steady_clock::now());
+    p_image_msg->step =
+        static_cast<sensor_msgs::msg::Image::_step_type>(output_width * 3U);
+    p_image_msg->data = std::move(bgr_downscaled);
+    const double ros_msg_build_ms = elapsed_ms(msg_start, std::chrono::steady_clock::now());
 
     const auto publish_start = std::chrono::steady_clock::now();
     m_pub_->publish(std::move(p_image_msg));
@@ -693,97 +650,14 @@ void ArenaCameraNode::resize_and_publish_worker_()
       log_info(
           "Publish timing frame " + std::to_string(frame_count) +
           " | queue_wait=" + std::to_string(queue_wait_ms) + " ms" +
-          " vpi_resize_total=" + std::to_string(vpi_resize_ms) + " ms" +
-          " ros_msg_copy=" + std::to_string(ros_msg_copy_ms) + " ms" +
+          " cuda_process=" + std::to_string(cuda_process_ms) + " ms" +
+          " ros_msg_build=" + std::to_string(ros_msg_build_ms) + " ms" +
           " publish=" + std::to_string(publish_ms) + " ms" +
           " source_get=" + std::to_string(frame.get_image_ms) + " ms" +
           " raw_save=" + std::to_string(frame.raw_save_ms) + " ms" +
-          " arena_convert=" + std::to_string(frame.arena_convert_ms) + " ms" +
-          " full_copy=" + std::to_string(frame.full_frame_copy_ms) + " ms");
+          " raw_copy=" + std::to_string(frame.raw_copy_ms) + " ms");
     }
   }
-}
-
-cv::Mat ArenaCameraNode::resize_with_vpi_vic_(const PublishFrame& frame)
-{
-  const int input_width = static_cast<int>(frame.width);
-  const int input_height = static_cast<int>(frame.height);
-  const int output_width = input_width / 8;
-  const int output_height = input_height / 8;
-
-  cv::Mat input_bgra(input_height, input_width, CV_8UC4, const_cast<uint8_t*>(frame.bgra.data()));
-  cv::Mat output_bgra(output_height, output_width, CV_8UC4);
-  cv::Mat output_bgr(output_height, output_width, CV_8UC3);
-
-  VpiStreamGuard stream;
-  const auto stream_start = std::chrono::steady_clock::now();
-  CHECK_VPI(vpiStreamCreate(VPI_BACKEND_VIC, &stream.stream));
-  const double stream_create_ms = elapsed_ms(stream_start, std::chrono::steady_clock::now());
-
-  const auto wrap_start = std::chrono::steady_clock::now();
-  VpiImageGuard input_bgra_vpi;
-  CHECK_VPI(vpiImageCreateWrapperOpenCVMat(
-      input_bgra, VPI_IMAGE_FORMAT_BGRA8, VPI_BACKEND_VIC, &input_bgra_vpi.image));
-  const double input_wrap_ms = elapsed_ms(wrap_start, std::chrono::steady_clock::now());
-
-  const auto create_output_start = std::chrono::steady_clock::now();
-  VpiImageGuard output_bgra_vpi;
-  CHECK_VPI(vpiImageCreate(
-      output_width,
-      output_height,
-      VPI_IMAGE_FORMAT_BGRA8,
-      VPI_BACKEND_VIC | VPI_BACKEND_CPU,
-      &output_bgra_vpi.image));
-  const double output_create_ms = elapsed_ms(create_output_start, std::chrono::steady_clock::now());
-
-  const auto submit_start = std::chrono::steady_clock::now();
-  CHECK_VPI(vpiSubmitRescale(
-      stream.stream,
-      VPI_BACKEND_VIC,
-      input_bgra_vpi.image,
-      output_bgra_vpi.image,
-      VPI_INTERP_LINEAR,
-      VPI_BORDER_CLAMP,
-      0));
-  const double submit_ms = elapsed_ms(submit_start, std::chrono::steady_clock::now());
-
-  const auto sync_start = std::chrono::steady_clock::now();
-  CHECK_VPI(vpiStreamSync(stream.stream));
-  const double sync_ms = elapsed_ms(sync_start, std::chrono::steady_clock::now());
-
-  const auto lock_start = std::chrono::steady_clock::now();
-  VPIImageData output_data = {};
-  CHECK_VPI(vpiImageLockData(
-      output_bgra_vpi.image, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &output_data));
-  VpiImageLockGuard output_lock;
-  output_lock.image = output_bgra_vpi.image;
-  output_lock.locked = true;
-  const double lock_ms = elapsed_ms(lock_start, std::chrono::steady_clock::now());
-
-  const auto export_start = std::chrono::steady_clock::now();
-  cv::Mat output_view;
-  CHECK_VPI(vpiImageDataExportOpenCVMat(output_data, &output_view));
-  output_view.copyTo(output_bgra);
-  const double export_copy_ms = elapsed_ms(export_start, std::chrono::steady_clock::now());
-
-  const auto color_start = std::chrono::steady_clock::now();
-  cv::cvtColor(output_bgra, output_bgr, cv::COLOR_BGRA2BGR);
-  const double small_color_ms = elapsed_ms(color_start, std::chrono::steady_clock::now());
-
-  const uint64_t frame_count = publish_timing_frame_count_.load(std::memory_order_relaxed) + 1;
-  if (frame_count % 30 == 0) {
-    log_info(
-        "VPI detail frame " + std::to_string(frame_count) +
-        " | stream_create=" + std::to_string(stream_create_ms) + " ms" +
-        " input_wrap=" + std::to_string(input_wrap_ms) + " ms" +
-        " output_create=" + std::to_string(output_create_ms) + " ms" +
-        " submit=" + std::to_string(submit_ms) + " ms" +
-        " sync=" + std::to_string(sync_ms) + " ms" +
-        " lock=" + std::to_string(lock_ms) + " ms" +
-        " export_copy=" + std::to_string(export_copy_ms) + " ms" +
-        " small_cvtColor=" + std::to_string(small_color_ms) + " ms");
-  }
-  return output_bgr;
 }
 
 void ArenaCameraNode::publish_camera_diagnostics_()
