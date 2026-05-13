@@ -82,6 +82,7 @@ def _launch_lucid_camera(_):
             {'width':                     lucid.get('width',                      5320)},
             {'height':                    lucid.get('height',                     4600)},
             {'pixelformat':               lucid.get('pixelformat',               'bayer_rggb16')},
+            {'bayer_raw_shift':           int(lucid.get('bayer_raw_shift',        8))},
             {'hardware_trigger':          ht_bool},
             {'exposure_auto':             lucid.get('exposure_auto',             'Continuous')},
             {'gain_auto':                 lucid.get('gain_auto',                 'Continuous')},

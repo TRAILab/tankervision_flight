@@ -14,7 +14,7 @@ echo "[install] Detected camera interface: $CAMERA_IFACE"
 echo "[install] Installing system dependencies..."
 sudo apt install -y chrony gpsd gpsd-clients linuxptp arp-scan \
     libopencv-dev ros-humble-cv-bridge ros-humble-nmea-msgs \
-    ros-humble-v4l2-camera libnvvpi3 vpi3-dev
+    ros-humble-v4l2-camera
 
 # Python dependencies
 pip3 install "numpy<2" ultralytics gps

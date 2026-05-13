@@ -1,16 +1,22 @@
 cmake_minimum_required(VERSION 3.15)
 
-project(arena_camera_node)
+project(arena_camera_node LANGUAGES C CXX CUDA)
 
 # Default to C99
 if(NOT CMAKE_C_STANDARD)
   set(CMAKE_C_STANDARD 99)
 endif()
 
-# Default to C++14
+# Default to C++17. ArenaCameraNode.cpp uses std::filesystem.
 if(NOT CMAKE_CXX_STANDARD)
-  set(CMAKE_CXX_STANDARD 14)
+  set(CMAKE_CXX_STANDARD 17)
 endif()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if(NOT CMAKE_CUDA_STANDARD)
+  set(CMAKE_CUDA_STANDARD 14)
+endif()
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 	# linked GenICam hearders give warnings No such file or directory
@@ -48,9 +54,7 @@ find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(arena_sdk REQUIRED)
-find_package(OpenCV REQUIRED)
-find_package(vpi REQUIRED)
-include_directories(${OpenCV_INCLUDE_DIRS})
+find_package(CUDAToolkit REQUIRED)
 
 # ------------
 # EXPORT DEPS
@@ -115,6 +119,7 @@ set(target_name start)
 add_executable(${target_name}
     src/main.cpp
     src/ArenaCameraNode.cpp
+    src/bayer_downscale_cuda.cu
     src/light_arena/deviceinfo_helper.cpp
     src/rclcpp_adapter/pixelformat_translation.cpp
     src/rclcpp_adapter/quilty_of_service_translation.cpp
@@ -147,7 +152,7 @@ ament_target_dependencies(${target_name}  rclcpp
                                           sensor_msgs
                                           arena_sdk
                                           )
-target_link_libraries(${target_name} ${OpenCV_LIBS} vpi)
+target_link_libraries(${target_name} CUDA::cudart)
 
 # MV EXEC to lib dir
 install(TARGETS

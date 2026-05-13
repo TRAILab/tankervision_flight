@@ -10,6 +10,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <memory>
@@ -25,7 +26,6 @@
 #include <rclcpp/timer.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <std_msgs/msg/string.hpp>
-#include <opencv2/core.hpp>
 
 // Arena SDK
 #include "ArenaApi.h"
@@ -108,12 +108,11 @@ class ArenaCameraNode : public rclcpp::Node
     std::string frame_id;
     size_t width{0};
     size_t height{0};
-    std::vector<uint8_t> bgra;
+    std::vector<uint16_t> bayer;
     std::chrono::steady_clock::time_point queued_at;
     double get_image_ms{0.0};
     double raw_save_ms{0.0};
-    double arena_convert_ms{0.0};
-    double full_frame_copy_ms{0.0};
+    double raw_copy_ms{0.0};
   };
   std::atomic<bool> running_{true};
   std::thread acquisition_thread_;
@@ -124,6 +123,8 @@ class ArenaCameraNode : public rclcpp::Node
   static constexpr size_t kMaxPublishQueueSize = 2;
   std::atomic<uint64_t> timing_frame_count_{0};
   std::atomic<uint64_t> publish_timing_frame_count_{0};
+  int bayer_raw_shift_{8};
+  static constexpr size_t kPublishDownscaleFactor = 8;
 
   // ROI
   size_t width_{0};
@@ -191,7 +192,6 @@ class ArenaCameraNode : public rclcpp::Node
   void publish_images_();
   void resize_and_publish_worker_();
   void enqueue_publish_frame_(PublishFrame frame);
-  cv::Mat resize_with_vpi_vic_(const PublishFrame& frame);
 
   // Raw recording
   void record_mode_callback_(const std_msgs::msg::String::SharedPtr msg);
