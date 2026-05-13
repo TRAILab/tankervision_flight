@@ -86,6 +86,14 @@ do
 done
 
 echo "[install] Building ROS2 workspace..."
+if [[ -x /usr/local/cuda/bin/nvcc ]]; then
+    export CUDACXX=/usr/local/cuda/bin/nvcc
+    export PATH=/usr/local/cuda/bin:$PATH
+else
+    echo "[install] ERROR: CUDA compiler not found at /usr/local/cuda/bin/nvcc."
+    echo "[install] Install the Jetson CUDA toolkit/compiler before building arena_camera_node."
+    exit 1
+fi
 source /opt/ros/humble/setup.bash
 cd "$REPO_DIR"
 colcon build --symlink-install --packages-skip xsens_mti_ros2_driver

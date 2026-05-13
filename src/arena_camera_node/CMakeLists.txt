@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.15)
 
+if(NOT DEFINED CMAKE_CUDA_COMPILER AND EXISTS "/usr/local/cuda/bin/nvcc")
+  set(CMAKE_CUDA_COMPILER "/usr/local/cuda/bin/nvcc")
+endif()
+
 project(arena_camera_node LANGUAGES C CXX CUDA)
 
 # Default to C99

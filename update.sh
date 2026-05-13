@@ -148,11 +148,19 @@ restart_svc ptp4l.service
 
 # ── 5. Rebuild ROS2 workspace ─────────────────────────────────────
 info "Building ROS2 workspace..."
+if [[ -x /usr/local/cuda/bin/nvcc ]]; then
+    export CUDACXX=/usr/local/cuda/bin/nvcc
+    export PATH=/usr/local/cuda/bin:$PATH
+else
+    error "CUDA compiler not found at /usr/local/cuda/bin/nvcc. Install the Jetson CUDA toolkit/compiler before building arena_camera_node."
+fi
 set +u
 source /opt/ros/humble/setup.bash
 set -u
 cd "$REPO_DIR"
 rm -rf \
+    "$REPO_DIR/build/arena_camera_node" \
+    "$REPO_DIR/install/arena_camera_node" \
     "$REPO_DIR/build/tanker_vision" \
     "$REPO_DIR/install/tanker_vision" \
     "$REPO_DIR/src/tanker_vision/tanker_vision.egg-info"
