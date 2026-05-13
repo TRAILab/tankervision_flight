@@ -1,8 +1,6 @@
 import os
 import time
 import yaml
-import subprocess
-from datetime import datetime
 
 import rclpy
 from rclpy.node import Node
@@ -69,11 +67,9 @@ class RecordDataNode(Node):
         self._timeout_sec  = float(trigger_cfg.get('timeout_sec', 20.0))
         self._cooldown_sec = float(trigger_cfg.get('cooldown_sec', 5.0))
 
-        self._session_path   = None
         self._is_recording   = False
         self._recording_end  = 0.0
         self._cooldown_until = 0.0
-        self._process        = None
 
         self.yolo_model = YOLO(model_path, verbose=False)
 
@@ -103,14 +99,12 @@ class RecordDataNode(Node):
 
         self.cv_bridge  = CvBridge()
 
-        # Latched subscription — receives session path even if status_node started first
-        self.create_subscription(
-            String, '/tankervision/session_path', self._session_path_cb, _LATCHED_QOS)
-
         self.create_subscription(Image, '/cam0/image_raw', self._image_cb, 3)
 
         self._status_pub  = self.create_publisher(String, '/record_data/status',  10)
         self._trigger_pub = self.create_publisher(Empty,  '/save_images_trigger', 10)
+        self._camera_record_mode_pub = self.create_publisher(
+            String, '/camera/record_mode', _LATCHED_QOS)
 
         self.create_timer(1.0, self._check_recording_status)
         self.get_logger().info(
@@ -118,14 +112,15 @@ class RecordDataNode(Node):
             f'conf={self._confidence} class={self._fire_class}'
         )
 
-    def _session_path_cb(self, msg: String):
-        self._session_path = msg.data
-        self.get_logger().info(f'Session path: {self._session_path}')
-
     def _publish_status(self, status: str):
         msg = String()
         msg.data = status
         self._status_pub.publish(msg)
+
+    def _publish_camera_record_mode(self, mode: str):
+        msg = String()
+        msg.data = mode
+        self._camera_record_mode_pub.publish(msg)
 
     def _image_cb(self, msg: Image):
         cv_image = self.cv_bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
@@ -150,7 +145,7 @@ class RecordDataNode(Node):
 
         if not self._is_recording:
             self._publish_status('SCANNING')
-        elif self._process and self._process.poll() is None:
+        else:
             self._publish_status('RECORDING')
 
     def _start_or_extend_recording(self):
@@ -163,43 +158,24 @@ class RecordDataNode(Node):
             self._recording_end = now + self._timeout_sec
             return
 
-        if self._session_path is None:
-            self.get_logger().warn('Fire detected but session path not yet received — skipping')
-            return
-
-        ts       = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-        bag_path = os.path.join(self._session_path, f'fire_{ts}')
-
-        cmd = [
-            '/opt/ros/humble/bin/ros2', 'bag', 'record',
-            '-o', bag_path,
-            '/cam0/image_raw', '/im19/imu',
-            '--compression-mode', 'message',
-            '--compression-format', 'zstd',
-            '-b', '100000000',
-        ]
-        self._process       = subprocess.Popen(cmd)
         self._is_recording  = True
         self._recording_end = now + self._timeout_sec
-        self.get_logger().info(f'Recording started: {bag_path}')
+        self._publish_camera_record_mode('record')
+        self.get_logger().info('Fire detected: camera raw recording requested')
 
     def _check_recording_status(self):
         self._publish_status('RECORDING' if self._is_recording else 'SCANNING')
         if not self._is_recording:
             return
         if time.time() > self._recording_end:
-            if self._process is not None:
-                self._process.terminate()
-                self._process.wait()
-                self._process = None
             self._is_recording   = False
             self._cooldown_until = time.time() + self._cooldown_sec
-            self.get_logger().info('Recording stopped.')
+            self._publish_camera_record_mode('standby')
+            self.get_logger().info('Camera raw recording standby requested')
 
     def destroy_node(self):
-        if self._process is not None:
-            self._process.terminate()
-            self._process.wait()
+        if self._is_recording:
+            self._publish_camera_record_mode('standby')
         super().destroy_node()
 
 

@@ -178,10 +178,15 @@ void ArenaCameraNode::initialize_()
   camera_diag_pub_ = this->create_publisher<std_msgs::msg::String>(
       std::string("/camera/lucid_diagnostics"), 10);
 
-  record_mode_sub_ = this->create_subscription<std_msgs::msg::String>(
-      "/camera/record_mode", rclcpp::QoS(10).reliable(),
-      std::bind(
-          &ArenaCameraNode::record_mode_callback_, this, std::placeholders::_1));
+  {
+    auto qos = rclcpp::QoS(1)
+        .reliability(rclcpp::ReliabilityPolicy::Reliable)
+        .durability(rclcpp::DurabilityPolicy::TransientLocal);
+    record_mode_sub_ = this->create_subscription<std_msgs::msg::String>(
+        "/camera/record_mode", qos,
+        std::bind(
+            &ArenaCameraNode::record_mode_callback_, this, std::placeholders::_1));
+  }
 
   {
     auto qos = rclcpp::QoS(1)
