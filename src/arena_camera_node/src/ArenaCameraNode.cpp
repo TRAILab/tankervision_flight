@@ -951,6 +951,11 @@ void ArenaCameraNode::set_nodes_trigger_mode_()
           "\tavoid long waits waiting for triggered images by providing proper "
           "exposure_time.");
     }
+    try {
+      Arena::SetNodeValue<GenICam::gcstring>(nodemap, "AcquisitionMode", "Continuous");
+    } catch (const GenICam::GenericException& e) {
+      log_warn(std::string("\tAcquisitionMode not configurable: ") + e.what());
+    }
     Arena::SetNodeValue<GenICam::gcstring>(nodemap, "TriggerMode", "Off");
     Arena::SetNodeValue<GenICam::gcstring>(nodemap, "LineSelector", "Line2");
     Arena::SetNodeValue<GenICam::gcstring>(nodemap, "LineMode", "Input");
@@ -958,6 +963,36 @@ void ArenaCameraNode::set_nodes_trigger_mode_()
     Arena::SetNodeValue<GenICam::gcstring>(nodemap, "TriggerSource", "Line2");
     Arena::SetNodeValue<GenICam::gcstring>(nodemap, "TriggerActivation", "FallingEdge");
     Arena::SetNodeValue<GenICam::gcstring>(nodemap, "TriggerMode", "On");
+
+    const std::string trigger_mode =
+        std::string(Arena::GetNodeValue<GenICam::gcstring>(nodemap, "TriggerMode"));
+    const std::string trigger_selector =
+        std::string(Arena::GetNodeValue<GenICam::gcstring>(nodemap, "TriggerSelector"));
+    const std::string trigger_source =
+        std::string(Arena::GetNodeValue<GenICam::gcstring>(nodemap, "TriggerSource"));
+    const std::string trigger_activation =
+        std::string(Arena::GetNodeValue<GenICam::gcstring>(nodemap, "TriggerActivation"));
+    const std::string line_selector =
+        std::string(Arena::GetNodeValue<GenICam::gcstring>(nodemap, "LineSelector"));
+    const std::string line_mode =
+        std::string(Arena::GetNodeValue<GenICam::gcstring>(nodemap, "LineMode"));
+
+    log_info(
+        "\tTrigger readback: TriggerMode=" + trigger_mode +
+        " TriggerSelector=" + trigger_selector +
+        " TriggerSource=" + trigger_source +
+        " TriggerActivation=" + trigger_activation +
+        " LineSelector=" + line_selector +
+        " LineMode=" + line_mode);
+
+    if (trigger_mode != "On" ||
+        trigger_selector != "FrameStart" ||
+        trigger_source != "Line2" ||
+        trigger_activation != "FallingEdge") {
+      throw std::runtime_error(
+          "Camera trigger configuration readback did not match requested hardware trigger mode");
+    }
+
     log_warn(
         "\thardware_trigger is enabled: camera waits for Line2 falling-edge "
         "FrameStart triggers");
