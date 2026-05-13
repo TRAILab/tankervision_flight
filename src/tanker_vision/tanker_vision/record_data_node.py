@@ -11,6 +11,8 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import String, Empty
 from cv_bridge import CvBridge
 from ultralytics import YOLO
+import torch
+import numpy as np
 
 _LATCHED_QOS = QoSProfile(
     durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -74,6 +76,31 @@ class RecordDataNode(Node):
         self._process        = None
 
         self.yolo_model = YOLO(model_path, verbose=False)
+
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "CUDA is not available. Refusing to start RecordDataNode because YOLO trigger must run on GPU."
+            )
+
+        self.yolo_model.to("cuda")
+        self._yolo_device = 0
+
+        self.get_logger().info(
+            f"YOLO using CUDA: {torch.cuda.get_device_name(0)} | "
+            f"model device={next(self.yolo_model.model.parameters()).device}"
+        )
+
+        dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+        _ = self.yolo_model.predict(
+            dummy,
+            imgsz=640,
+            conf=self._confidence,
+            device=self._yolo_device,
+            verbose=False,
+        )
+        torch.cuda.synchronize()
+        self.get_logger().info("YOLO warmup complete")
+
         self.cv_bridge  = CvBridge()
 
         # Latched subscription — receives session path even if status_node started first
@@ -102,12 +129,18 @@ class RecordDataNode(Node):
 
     def _image_cb(self, msg: Image):
         cv_image = self.cv_bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-        results  = self.yolo_model(cv_image, conf=self._confidence, verbose=False)
+        results = self.yolo_model.predict(
+            cv_image,
+            imgsz=640,
+            conf=self._confidence,
+            device=self._yolo_device,
+            verbose=False,
+        )
 
         fire_detected = False
         if results and hasattr(results[0], 'boxes'):
             for box in results[0].boxes:
-                if int(box.cls) == self._fire_class:
+                if int(box.cls[0]) == self._fire_class:
                     fire_detected = True
                     break
 

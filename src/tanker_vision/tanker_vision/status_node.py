@@ -387,10 +387,10 @@ class StatusNode(Node):
         self.imu.check_heartbeat_timeout(self.get_clock().now(), 2.0)
 
     def _check_camera_heartbeat(self):
-        self.camera.check_heartbeat_timeout(self.get_clock().now(), 3.0)
+        self.camera.check_heartbeat_timeout(self.get_clock().now(), 1.5)
 
     def _check_recording_heartbeat(self):
-        self.recording.check_heartbeat_timeout(self.get_clock().now(), 8.0)
+        self.recording.check_heartbeat_timeout(self.get_clock().now(), 1.5)
 
     def _check_maxvis_record_heartbeat(self):
         self.maxvis.check_heartbeat_timeout(self.get_clock().now(), 2.5)
