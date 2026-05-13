@@ -22,7 +22,6 @@ storage:
 trigger:
   topic: /save_images_trigger
   timeout_sec: 20
-  cooldown_sec: 3
 
 lucid_camera:
   topic: /cam0/image_raw

@@ -65,11 +65,9 @@ class RecordDataNode(Node):
         self._fire_class   = int(yolo_cfg.get('fire_class', 2))
         self._confidence   = float(yolo_cfg.get('confidence', 0.3))
         self._timeout_sec  = float(trigger_cfg.get('timeout_sec', 20.0))
-        self._cooldown_sec = float(trigger_cfg.get('cooldown_sec', 5.0))
 
         self._is_recording   = False
         self._recording_end  = 0.0
-        self._cooldown_until = 0.0
 
         self.yolo_model = YOLO(model_path, verbose=False)
 
@@ -107,6 +105,8 @@ class RecordDataNode(Node):
             String, '/camera/record_mode', _LATCHED_QOS)
 
         self.create_timer(1.0, self._check_recording_status)
+        self.create_timer(5.0, self._publish_record_heartbeat)
+        self.create_timer(60.0, self._publish_standby_heartbeat)
         self.get_logger().info(
             f'RecordDataNode started | model={model_path} '
             f'conf={self._confidence} class={self._fire_class}'
@@ -143,16 +143,8 @@ class RecordDataNode(Node):
             self._trigger_pub.publish(Empty())
             self._start_or_extend_recording()
 
-        if not self._is_recording:
-            self._publish_status('SCANNING')
-        else:
-            self._publish_status('RECORDING')
-
     def _start_or_extend_recording(self):
         now = time.time()
-
-        if now < self._cooldown_until:
-            return
 
         if self._is_recording:
             self._recording_end = now + self._timeout_sec
@@ -169,9 +161,16 @@ class RecordDataNode(Node):
             return
         if time.time() > self._recording_end:
             self._is_recording   = False
-            self._cooldown_until = time.time() + self._cooldown_sec
             self._publish_camera_record_mode('standby')
             self.get_logger().info('Camera raw recording standby requested')
+
+    def _publish_record_heartbeat(self):
+        if self._is_recording:
+            self._publish_camera_record_mode('record')
+
+    def _publish_standby_heartbeat(self):
+        if not self._is_recording:
+            self._publish_camera_record_mode('standby')
 
     def destroy_node(self):
         if self._is_recording:
