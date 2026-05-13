@@ -109,6 +109,11 @@ class ArenaCameraNode : public rclcpp::Node
     size_t width{0};
     size_t height{0};
     std::vector<uint8_t> bgra;
+    std::chrono::steady_clock::time_point queued_at;
+    double get_image_ms{0.0};
+    double raw_save_ms{0.0};
+    double arena_convert_ms{0.0};
+    double full_frame_copy_ms{0.0};
   };
   std::atomic<bool> running_{true};
   std::thread acquisition_thread_;
@@ -117,6 +122,8 @@ class ArenaCameraNode : public rclcpp::Node
   std::condition_variable publish_queue_cv_;
   std::deque<PublishFrame> publish_queue_;
   static constexpr size_t kMaxPublishQueueSize = 2;
+  std::atomic<uint64_t> timing_frame_count_{0};
+  std::atomic<uint64_t> publish_timing_frame_count_{0};
 
   // ROI
   size_t width_{0};
