@@ -14,7 +14,6 @@
 #include <vpi/OpenCVInterop.hpp>
 #include <vpi/Status.h>
 #include <vpi/Stream.h>
-#include <vpi/algo/ConvertImageFormat.h>
 #include <vpi/algo/Rescale.h>
 #include "rmw/types.h"
 #include <rclcpp/rclcpp.hpp>
@@ -525,14 +524,14 @@ void ArenaCameraNode::publish_images_()
 
       Arena::IImage* converted = nullptr;
       try {
-        converted = Arena::ImageFactory::Convert(pImage, PFNC_BGR8);
+        converted = Arena::ImageFactory::Convert(pImage, PfncFormat::BGRa8);
         const size_t conv_width  = converted->GetWidth();
         const size_t conv_height = converted->GetHeight();
 
-        cv::Mat bgr(
+        cv::Mat bgra(
             static_cast<int>(conv_height),
             static_cast<int>(conv_width),
-            CV_8UC3,
+            CV_8UC4,
             const_cast<uint8_t*>(converted->GetData()));
 
         PublishFrame frame;
@@ -540,9 +539,9 @@ void ArenaCameraNode::publish_images_()
         frame.frame_id = frame_id;
         frame.width = conv_width;
         frame.height = conv_height;
-        const size_t img_data_size = bgr.total() * bgr.elemSize();
-        frame.bgr.resize(img_data_size);
-        std::memcpy(frame.bgr.data(), bgr.data, img_data_size);
+        const size_t img_data_size = bgra.total() * bgra.elemSize();
+        frame.bgra.resize(img_data_size);
+        std::memcpy(frame.bgra.data(), bgra.data, img_data_size);
 
         Arena::ImageFactory::Destroy(converted);
         converted = nullptr;
@@ -621,7 +620,7 @@ void ArenaCameraNode::resize_and_publish_worker_()
       publish_queue_.pop_front();
     }
 
-    if (frame.bgr.empty() || frame.width == 0 || frame.height == 0) {
+    if (frame.bgra.empty() || frame.width == 0 || frame.height == 0) {
       continue;
     }
 
@@ -659,30 +658,20 @@ cv::Mat ArenaCameraNode::resize_with_vpi_vic_(const PublishFrame& frame)
   const int output_width = input_width / 8;
   const int output_height = input_height / 8;
 
-  cv::Mat input_bgr(input_height, input_width, CV_8UC3, const_cast<uint8_t*>(frame.bgr.data()));
+  cv::Mat input_bgra(input_height, input_width, CV_8UC4, const_cast<uint8_t*>(frame.bgra.data()));
+  cv::Mat output_bgra(output_height, output_width, CV_8UC4);
   cv::Mat output_bgr(output_height, output_width, CV_8UC3);
 
   VpiStreamGuard stream;
   CHECK_VPI(vpiStreamCreate(VPI_BACKEND_VIC, &stream.stream));
 
-  VpiImageGuard input_bgr_vpi;
-  CHECK_VPI(vpiImageCreateWrapperOpenCVMat(
-      input_bgr, VPI_IMAGE_FORMAT_BGR8, VPI_BACKEND_VIC, &input_bgr_vpi.image));
-
   VpiImageGuard input_bgra_vpi;
-  CHECK_VPI(vpiImageCreate(
-      input_width, input_height, VPI_IMAGE_FORMAT_BGRA8, VPI_BACKEND_VIC, &input_bgra_vpi.image));
+  CHECK_VPI(vpiImageCreateWrapperOpenCVMat(
+      input_bgra, VPI_IMAGE_FORMAT_BGRA8, VPI_BACKEND_VIC, &input_bgra_vpi.image));
 
   VpiImageGuard output_bgra_vpi;
   CHECK_VPI(vpiImageCreate(
       output_width, output_height, VPI_IMAGE_FORMAT_BGRA8, VPI_BACKEND_VIC, &output_bgra_vpi.image));
-
-  VpiImageGuard output_bgr_vpi;
-  CHECK_VPI(vpiImageCreate(
-      output_width, output_height, VPI_IMAGE_FORMAT_BGR8, VPI_BACKEND_VIC, &output_bgr_vpi.image));
-
-  CHECK_VPI(vpiSubmitConvertImageFormat(
-      stream.stream, VPI_BACKEND_VIC, input_bgr_vpi.image, input_bgra_vpi.image, nullptr));
 
   CHECK_VPI(vpiSubmitRescale(
       stream.stream,
@@ -693,20 +682,18 @@ cv::Mat ArenaCameraNode::resize_with_vpi_vic_(const PublishFrame& frame)
       VPI_BORDER_CLAMP,
       0));
 
-  CHECK_VPI(vpiSubmitConvertImageFormat(
-      stream.stream, VPI_BACKEND_VIC, output_bgra_vpi.image, output_bgr_vpi.image, nullptr));
-
   CHECK_VPI(vpiStreamSync(stream.stream));
   VPIImageData output_data = {};
   CHECK_VPI(vpiImageLockData(
-      output_bgr_vpi.image, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &output_data));
+      output_bgra_vpi.image, VPI_LOCK_READ, VPI_IMAGE_BUFFER_HOST_PITCH_LINEAR, &output_data));
   VpiImageLockGuard output_lock;
-  output_lock.image = output_bgr_vpi.image;
+  output_lock.image = output_bgra_vpi.image;
   output_lock.locked = true;
 
   cv::Mat output_view;
   CHECK_VPI(vpiImageDataExportOpenCVMat(output_data, &output_view));
-  output_view.copyTo(output_bgr);
+  output_view.copyTo(output_bgra);
+  cv::cvtColor(output_bgra, output_bgr, cv::COLOR_BGRA2BGR);
   return output_bgr;
 }
 

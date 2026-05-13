@@ -108,7 +108,7 @@ class ArenaCameraNode : public rclcpp::Node
     std::string frame_id;
     size_t width{0};
     size_t height{0};
-    std::vector<uint8_t> bgr;
+    std::vector<uint8_t> bgra;
   };
   std::atomic<bool> running_{true};
   std::thread acquisition_thread_;
