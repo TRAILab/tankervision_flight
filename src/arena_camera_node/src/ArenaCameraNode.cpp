@@ -671,7 +671,11 @@ cv::Mat ArenaCameraNode::resize_with_vpi_vic_(const PublishFrame& frame)
 
   VpiImageGuard output_bgra_vpi;
   CHECK_VPI(vpiImageCreate(
-      output_width, output_height, VPI_IMAGE_FORMAT_BGRA8, VPI_BACKEND_VIC, &output_bgra_vpi.image));
+      output_width,
+      output_height,
+      VPI_IMAGE_FORMAT_BGRA8,
+      VPI_BACKEND_VIC | VPI_BACKEND_CPU,
+      &output_bgra_vpi.image));
 
   CHECK_VPI(vpiSubmitRescale(
       stream.stream,
