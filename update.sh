@@ -34,11 +34,10 @@ info "Deploying configs..."
 info "Disabling fstab-managed storage pool mounts..."
 cp /etc/fstab /etc/fstab.tankervision-storage.bak
 sed -i -E \
-    -e '/^[[:space:]]*UUID=(3083-C6EC|C4C6-7FCD|58D2-4F5D)[[:space:]]/ s/^/# tankervision storage-pool manages this: /' \
+    -e '/^[[:space:]]*[^#][^[:space:]]+[[:space:]]+\/mnt\/hdd[0-2][[:space:]]/ s/^/# tankervision storage-pool manages this: /' \
     -e '/^[[:space:]]*\/mnt\/hdd0:\/mnt\/hdd1:\/mnt\/hdd2[[:space:]]+\/mnt\/storage[[:space:]]+mergerfs[[:space:]]/ s/^/# tankervision storage-pool manages this: /' \
     /etc/fstab
 command -v mergerfs >/dev/null || warn "  mergerfs is not installed — run install.sh or install mergerfs"
-command -v fsck.exfat >/dev/null || warn "  exfatprogs is not installed — run install.sh or install exfatprogs"
 
 cp_config() {
     local SRC="$1" DST="$2"

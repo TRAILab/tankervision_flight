@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-UUID0="3083-C6EC"
-UUID1="C4C6-7FCD"
-UUID2="58D2-4F5D"
+UUID0="a105c0df-1e33-447d-be55-99f1007297c0"
+UUID1="e92d0907-42e6-4261-b3da-2d03c7caca3f"
+UUID2="64b01f03-168c-42f4-afe4-fa252d927d52"
 
 mkdir -p /mnt/hdd0 /mnt/hdd1 /mnt/hdd2 /mnt/storage
 
@@ -32,9 +32,10 @@ umount /mnt/hdd1 2>/dev/null || true
 umount /mnt/hdd2 2>/dev/null || true
 
 echo "Mounting SSDs..."
-mount -t exfat -o defaults,nofail,noatime,uid=1000,gid=1000,umask=0022 /dev/disk/by-uuid/$UUID0 /mnt/hdd0
-mount -t exfat -o defaults,nofail,noatime,uid=1000,gid=1000,umask=0022 /dev/disk/by-uuid/$UUID1 /mnt/hdd1
-mount -t exfat -o defaults,nofail,noatime,uid=1000,gid=1000,umask=0022 /dev/disk/by-uuid/$UUID2 /mnt/hdd2
+mount -t ext4 -o defaults,noatime /dev/disk/by-uuid/$UUID0 /mnt/hdd0
+mount -t ext4 -o defaults,noatime /dev/disk/by-uuid/$UUID1 /mnt/hdd1
+mount -t ext4 -o defaults,noatime /dev/disk/by-uuid/$UUID2 /mnt/hdd2
+chown 1000:1000 /mnt/hdd0 /mnt/hdd1 /mnt/hdd2
 
 echo "Verifying SSD mounts..."
 findmnt /mnt/hdd0 >/dev/null
