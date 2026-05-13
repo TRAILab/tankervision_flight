@@ -272,6 +272,7 @@ class StatusNode(Node):
         self.create_timer(5.0,  self._check_internet)
         self.create_timer(10.0, self._check_time_sync)
         self._session_timer = self.create_timer(5.0, self._try_create_session)
+        self.create_timer(5.0, self._publish_session_path)
 
         # Attempt session folder creation immediately; timer retries on failure
         self._try_create_session()
@@ -342,8 +343,13 @@ class StatusNode(Node):
             _py_logger.warning(f'Could not write session path file: {e}')
 
         # Latched publish — late-starting nodes will still receive this
+        self._publish_session_path()
+
+    def _publish_session_path(self):
+        if not self._session_path:
+            return
         msg = String()
-        msg.data = session_path
+        msg.data = self._session_path
         self._session_path_pub.publish(msg)
 
     # ─── Heartbeat callbacks ──────────────────────────────────────────────────

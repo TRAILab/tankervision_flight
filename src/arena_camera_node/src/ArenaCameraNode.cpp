@@ -288,7 +288,7 @@ void ArenaCameraNode::record_mode_callback_(const std_msgs::msg::String::SharedP
 void ArenaCameraNode::session_path_callback_(const std_msgs::msg::String::SharedPtr msg)
 {
   if (!msg || msg->data.empty()) return;
-  std::filesystem::path new_dir = std::filesystem::path(msg->data);
+  std::filesystem::path new_dir = std::filesystem::path(msg->data) / "saved_frames";
   std::error_code ec;
   std::filesystem::create_directories(new_dir, ec);
   if (ec) {
@@ -296,7 +296,7 @@ void ArenaCameraNode::session_path_callback_(const std_msgs::msg::String::Shared
     return;
   }
   raw_save_dir_ = new_dir;
-  log_info("Raw save directory updated to session path: " + new_dir.string());
+  log_info("Raw save directory updated to saved_frames path: " + new_dir.string());
 }
 
 rcl_interfaces::msg::SetParametersResult ArenaCameraNode::on_set_parameters_(

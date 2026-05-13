@@ -14,9 +14,17 @@ start_cat() {
     CAT_PID=$!
 }
 
+stop_cat() {
+    if [[ -n "$CAT_PID" ]]; then
+        kill "$CAT_PID" 2>/dev/null || true
+        wait "$CAT_PID" 2>/dev/null || true
+        CAT_PID=""
+    fi
+}
+
 while true; do
     if [[ ! -e /dev/gnss_raw ]]; then
-        [[ -n "$CAT_PID" ]] && kill "$CAT_PID" 2>/dev/null; CAT_PID=""
+        stop_cat
         while [[ ! -e /dev/gnss_raw ]]; do sleep 1; done
         stty -F /dev/gnss_raw 921600 raw -echo -ixon -ixoff -icrnl -inlcr -opost
         [[ -n "$CURRENT_SESSION" ]] && start_cat
@@ -24,7 +32,7 @@ while true; do
 
     SESSION=$(cat /tmp/tankervision_session_path 2>/dev/null || echo "")
     if [[ -n "$SESSION" ]] && [[ "$SESSION" != "$CURRENT_SESSION" ]]; then
-        [[ -n "$CAT_PID" ]] && kill "$CAT_PID" 2>/dev/null; CAT_PID=""
+        stop_cat
         CURRENT_SESSION="$SESSION"
         mkdir -p "$CURRENT_SESSION"
         start_cat
