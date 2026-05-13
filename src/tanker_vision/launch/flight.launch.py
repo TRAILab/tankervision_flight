@@ -62,6 +62,14 @@ def _load_cfg() -> dict:
     return cfg
 
 
+def _as_bool(value, default=False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 def _node_params() -> list:
     """Both config paths passed to every node so they can load and merge config themselves."""
     return [{'config': _CFG_PATH}, {'unit_config': _UNIT_CFG_PATH}]
@@ -84,6 +92,8 @@ def _launch_lucid_camera(_):
             {'pixelformat':               lucid.get('pixelformat',               'bayer_rggb16')},
             {'bayer_raw_shift':           int(lucid.get('bayer_raw_shift',        8))},
             {'hardware_trigger':          ht_bool},
+            {'acquisition_frame_rate_enable': _as_bool(lucid.get('acquisition_frame_rate_enable', True), True)},
+            {'acquisition_frame_rate':     float(lucid.get('acquisition_frame_rate', 1.0))},
             {'exposure_auto':             lucid.get('exposure_auto',             'Continuous')},
             {'gain_auto':                 lucid.get('gain_auto',                 'Continuous')},
             {'target_brightness':         int(lucid.get('target_brightness',      70))},
