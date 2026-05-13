@@ -42,11 +42,24 @@ findmnt /mnt/hdd1 >/dev/null
 findmnt /mnt/hdd2 >/dev/null
 
 echo "Mounting mergerfs..."
-mergerfs \
-  -o allow_other,use_ino,cache.files=off,category.create=epmfs,func.getattr=newest,dropcacheonclose=false,minfreespace=100G \
-  /mnt/hdd0:/mnt/hdd1:/mnt/hdd2 \
-  /mnt/storage
+if ! mergerfs \
+    -o allow_other,use_ino,cache.files=off,category.create=epmfs,func.getattr=newest,dropcacheonclose=false,minfreespace=100G \
+    /mnt/hdd0:/mnt/hdd1:/mnt/hdd2 \
+    /mnt/storage; then
+    echo "ERROR: mergerfs mount failed"
+    mount | grep -E "/mnt/hdd|/mnt/storage" || true
+    ls -la /mnt/storage || true
+    exit 1
+fi
+
+echo "Verifying mergerfs mount..."
+if ! findmnt -T /mnt/storage -t fuse.mergerfs >/dev/null; then
+    echo "ERROR: /mnt/storage is not a mergerfs mount"
+    findmnt /mnt/storage || true
+    mount | grep -E "/mnt/hdd|/mnt/storage" || true
+    exit 1
+fi
 
 echo "Mounted storage pool:"
-findmnt -R /mnt
-df -h /mnt/hdd0 /mnt/hdd1 /mnt/hdd2 /mnt/storage
+findmnt /mnt/hdd0 /mnt/hdd1 /mnt/hdd2 /mnt/storage || true
+df -h /mnt/hdd0 /mnt/hdd1 /mnt/hdd2 /mnt/storage || true
