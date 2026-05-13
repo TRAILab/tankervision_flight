@@ -1,5 +1,7 @@
 #include <atomic>
+#include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -25,6 +27,24 @@ namespace
 double elapsed_ms(std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end)
 {
   return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+std::string lower_trimmed(std::string value)
+{
+  value.erase(
+      value.begin(),
+      std::find_if(value.begin(), value.end(), [](unsigned char ch) {
+        return !std::isspace(ch);
+      }));
+  value.erase(
+      std::find_if(value.rbegin(), value.rend(), [](unsigned char ch) {
+        return !std::isspace(ch);
+      }).base(),
+      value.end());
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value;
 }
 
 }  // namespace
@@ -206,9 +226,20 @@ void ArenaCameraNode::initialize_()
             &ArenaCameraNode::session_path_callback_, this, std::placeholders::_1));
   }
 
+  {
+    auto qos = rclcpp::QoS(1)
+        .reliability(rclcpp::ReliabilityPolicy::Reliable)
+        .durability(rclcpp::DurabilityPolicy::TransientLocal);
+    acquisition_mode_sub_ = this->create_subscription<std_msgs::msg::String>(
+        "/camera/acquisition_mode", qos,
+        std::bind(
+            &ArenaCameraNode::acquisition_mode_callback_, this, std::placeholders::_1));
+  }
+
   log_info(
       "Subscribed to /camera/record_mode. Send 'record' to save raw images, "
-      "'standby' to stop saving raw images. Waiting for /tankervision/session_path.");
+      "'standby' to stop saving raw images. Waiting for /tankervision/session_path. "
+      "Subscribed to /camera/acquisition_mode for 'rate_limited' and 'hardware_trigger'.");
 
   declare_tunable_parameters_();
   apply_initial_tunable_parameters_();
@@ -312,6 +343,27 @@ void ArenaCameraNode::session_path_callback_(const std_msgs::msg::String::Shared
   log_info("Raw save directory updated to saved_frames path: " + new_dir.string());
 }
 
+void ArenaCameraNode::acquisition_mode_callback_(const std_msgs::msg::String::SharedPtr msg)
+{
+  if (!msg) {
+    return;
+  }
+
+  const std::string mode = lower_trimmed(msg->data);
+  if (mode != "rate_limited" && mode != "hardware_trigger") {
+    log_warn(
+        "Ignoring unsupported /camera/acquisition_mode command: '" + msg->data +
+        "'. Expected 'rate_limited' or 'hardware_trigger'.");
+    return;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(acquisition_mode_mutex_);
+    requested_acquisition_mode_ = mode;
+  }
+  log_info("Queued acquisition mode switch: " + mode);
+}
+
 rcl_interfaces::msg::SetParametersResult ArenaCameraNode::on_set_parameters_(
     const std::vector<rclcpp::Parameter>& params)
 {
@@ -358,13 +410,13 @@ rcl_interfaces::msg::SetParametersResult ArenaCameraNode::on_set_parameters_(
       } else if (name == "auto_exposure_aoi_offset_y") {
         Arena::SetNodeValue<int64_t>(nodemap, "AutoExposureAOIOffsetY", param.as_int());
       } else if (name == "acquisition_frame_rate_enable") {
-        if (hardware_trigger_) {
+        if (hardware_trigger_.load(std::memory_order_acquire)) {
           log_warn("Ignoring acquisition_frame_rate_enable while hardware_trigger is enabled");
         } else {
           Arena::SetNodeValue<bool>(nodemap, "AcquisitionFrameRateEnable", param.as_bool());
         }
       } else if (name == "acquisition_frame_rate") {
-        if (hardware_trigger_) {
+        if (hardware_trigger_.load(std::memory_order_acquire)) {
           log_warn("Ignoring acquisition_frame_rate while hardware_trigger is enabled");
         } else {
           Arena::SetNodeValue<double>(nodemap, "AcquisitionFrameRate", param.as_double());
@@ -468,6 +520,8 @@ void ArenaCameraNode::publish_images_()
   Arena::IImage* pImage = nullptr;
   while (rclcpp::ok() && running_.load(std::memory_order_acquire)) {
     try {
+      apply_pending_acquisition_mode_();
+
       const auto get_start = std::chrono::steady_clock::now();
       pImage = m_pDevice->GetImage(1000);
       const auto get_end = std::chrono::steady_clock::now();
@@ -544,7 +598,7 @@ void ArenaCameraNode::publish_images_()
         pImage = nullptr;
       }
       const std::string msg = e.what();
-      if (hardware_trigger_ &&
+      if (hardware_trigger_.load(std::memory_order_acquire) &&
           (msg.find("timeout") != std::string::npos ||
            msg.find("Timeout") != std::string::npos ||
            msg.find("Timed out") != std::string::npos ||
@@ -570,6 +624,54 @@ void ArenaCameraNode::publish_images_()
       continue;
     }
   }
+}
+
+void ArenaCameraNode::apply_pending_acquisition_mode_()
+{
+  std::string mode;
+  {
+    std::lock_guard<std::mutex> lock(acquisition_mode_mutex_);
+    mode.swap(requested_acquisition_mode_);
+  }
+
+  if (mode.empty()) {
+    return;
+  }
+
+  try {
+    apply_acquisition_mode_(mode);
+  } catch (const std::exception& e) {
+    log_warn("Failed to apply acquisition mode '" + mode + "': " + e.what());
+  } catch (const GenICam::GenericException& e) {
+    log_warn("Failed to apply acquisition mode '" + mode + "': " + std::string(e.what()));
+  }
+}
+
+void ArenaCameraNode::apply_acquisition_mode_(const std::string& mode)
+{
+  const bool target_hardware_trigger = mode == "hardware_trigger";
+  if (target_hardware_trigger == hardware_trigger_.load(std::memory_order_acquire)) {
+    log_info("Acquisition mode already active: " + mode);
+    return;
+  }
+
+  log_info("Switching acquisition mode to: " + mode);
+  std::lock_guard<std::mutex> lock(camera_param_mutex_);
+  m_pDevice->StopStream();
+
+  try {
+    hardware_trigger_.store(target_hardware_trigger, std::memory_order_release);
+    set_nodes_acquisition_frame_rate_();
+    set_nodes_trigger_mode_();
+    m_pDevice->StartStream();
+  } catch (...) {
+    try {
+      m_pDevice->StartStream();
+    } catch (...) {}
+    throw;
+  }
+
+  log_info("Acquisition mode switch complete: " + mode);
 }
 
 void ArenaCameraNode::enqueue_publish_frame_(PublishFrame frame)
@@ -762,30 +864,7 @@ void ArenaCameraNode::set_nodes_()
   set_nodes_auto_exposure_gain_();
   set_nodes_pixelformat_();
 
-  if (!hardware_trigger_) {
-    try {
-      const bool frame_rate_enable =
-          this->get_parameter("acquisition_frame_rate_enable").as_bool();
-      const double frame_rate =
-          this->get_parameter("acquisition_frame_rate").as_double();
-      Arena::SetNodeValue<bool>(nodemap, "AcquisitionFrameRateEnable", frame_rate_enable);
-      if (frame_rate_enable) {
-        Arena::SetNodeValue<double>(nodemap, "AcquisitionFrameRate", frame_rate);
-        log_info("\tAcquisitionFrameRate set to " + std::to_string(frame_rate) + " Hz");
-      } else {
-        log_info("\tAcquisitionFrameRate disabled");
-      }
-    } catch (const GenICam::GenericException& e) {
-      log_warn(std::string("Failed to configure acquisition frame rate: ") + e.what());
-    } catch (const std::exception& e) {
-      log_warn(std::string("Failed to configure acquisition frame rate: ") + e.what());
-    }
-  } else {
-    try {
-      Arena::SetNodeValue<bool>(nodemap, "AcquisitionFrameRateEnable", false);
-    } catch (...) {}
-    log_info("\tAcquisitionFrameRate ignored because hardware_trigger is enabled");
-  }
+  set_nodes_acquisition_frame_rate_();
 
   set_nodes_trigger_mode_();
 
@@ -943,6 +1022,35 @@ void ArenaCameraNode::set_nodes_pixelformat_()
   }
 }
 
+void ArenaCameraNode::set_nodes_acquisition_frame_rate_()
+{
+  auto nodemap = m_pDevice->GetNodeMap();
+  if (!hardware_trigger_.load(std::memory_order_acquire)) {
+    try {
+      const bool frame_rate_enable =
+          this->get_parameter("acquisition_frame_rate_enable").as_bool();
+      const double frame_rate =
+          this->get_parameter("acquisition_frame_rate").as_double();
+      Arena::SetNodeValue<bool>(nodemap, "AcquisitionFrameRateEnable", frame_rate_enable);
+      if (frame_rate_enable) {
+        Arena::SetNodeValue<double>(nodemap, "AcquisitionFrameRate", frame_rate);
+        log_info("\tAcquisitionFrameRate set to " + std::to_string(frame_rate) + " Hz");
+      } else {
+        log_info("\tAcquisitionFrameRate disabled");
+      }
+    } catch (const GenICam::GenericException& e) {
+      log_warn(std::string("Failed to configure acquisition frame rate: ") + e.what());
+    } catch (const std::exception& e) {
+      log_warn(std::string("Failed to configure acquisition frame rate: ") + e.what());
+    }
+  } else {
+    try {
+      Arena::SetNodeValue<bool>(nodemap, "AcquisitionFrameRateEnable", false);
+    } catch (...) {}
+    log_info("\tAcquisitionFrameRate ignored because hardware_trigger is enabled");
+  }
+}
+
 void ArenaCameraNode::set_nodes_exposure_()
 {
   auto nodemap = m_pDevice->GetNodeMap();
@@ -959,7 +1067,7 @@ void ArenaCameraNode::set_nodes_exposure_()
 void ArenaCameraNode::set_nodes_trigger_mode_()
 {
   auto nodemap = m_pDevice->GetNodeMap();
-  if (hardware_trigger_) {
+  if (hardware_trigger_.load(std::memory_order_acquire)) {
     if (exposure_time_ < 0.0) {
       log_warn(
           "\tavoid long waits waiting for triggered images by providing proper "
@@ -1011,6 +1119,11 @@ void ArenaCameraNode::set_nodes_trigger_mode_()
         "\thardware_trigger is enabled: camera waits for Line2 falling-edge "
         "FrameStart triggers");
   } else {
+    try {
+      Arena::SetNodeValue<GenICam::gcstring>(nodemap, "AcquisitionMode", "Continuous");
+    } catch (const GenICam::GenericException& e) {
+      log_warn(std::string("\tAcquisitionMode not configurable: ") + e.what());
+    }
     Arena::SetNodeValue<GenICam::gcstring>(nodemap, "TriggerMode", "Off");
     log_info("\thardware_trigger is disabled: camera streams continuously");
   }

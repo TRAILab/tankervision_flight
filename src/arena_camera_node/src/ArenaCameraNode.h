@@ -89,6 +89,7 @@ class ArenaCameraNode : public rclcpp::Node
 
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr record_mode_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr session_path_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr acquisition_mode_sub_;
 
   rclcpp::TimerBase::SharedPtr m_wait_for_device_timer_callback_;
 
@@ -152,7 +153,9 @@ class ArenaCameraNode : public rclcpp::Node
   bool is_passed_pixelformat_ros_{false};
 
   // Trigger/acquisition mode
-  bool hardware_trigger_{false};
+  std::atomic<bool> hardware_trigger_{false};
+  std::mutex acquisition_mode_mutex_;
+  std::string requested_acquisition_mode_;
 
   // QoS
   std::string pub_qos_history_;
@@ -186,12 +189,16 @@ class ArenaCameraNode : public rclcpp::Node
   void set_nodes_exposure_();
   void set_nodes_auto_exposure_gain_();
   void set_nodes_trigger_mode_();
+  void set_nodes_acquisition_frame_rate_();
   void set_nodes_test_pattern_image_();
 
   // Main acquisition pipeline
   void publish_images_();
   void resize_and_publish_worker_();
   void enqueue_publish_frame_(PublishFrame frame);
+  void acquisition_mode_callback_(const std_msgs::msg::String::SharedPtr msg);
+  void apply_pending_acquisition_mode_();
+  void apply_acquisition_mode_(const std::string& mode);
 
   // Raw recording
   void record_mode_callback_(const std_msgs::msg::String::SharedPtr msg);
