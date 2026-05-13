@@ -5,6 +5,15 @@ UUID0="a105c0df-1e33-447d-be55-99f1007297c0"
 UUID1="e92d0907-42e6-4261-b3da-2d03c7caca3f"
 UUID2="64b01f03-168c-42f4-afe4-fa252d927d52"
 
+STORAGE_USER="${STORAGE_USER:-${SUDO_USER:-}}"
+if [[ -z "$STORAGE_USER" ]]; then
+    STORAGE_UID=1000
+    STORAGE_GID=1000
+else
+    STORAGE_UID=$(id -u "$STORAGE_USER")
+    STORAGE_GID=$(id -g "$STORAGE_USER")
+fi
+
 mkdir -p /mnt/hdd0 /mnt/hdd1 /mnt/hdd2 /mnt/storage
 
 echo "Waiting 20 seconds for USB bus to settle..."
@@ -35,7 +44,7 @@ echo "Mounting SSDs..."
 mount -t ext4 -o defaults,noatime /dev/disk/by-uuid/$UUID0 /mnt/hdd0
 mount -t ext4 -o defaults,noatime /dev/disk/by-uuid/$UUID1 /mnt/hdd1
 mount -t ext4 -o defaults,noatime /dev/disk/by-uuid/$UUID2 /mnt/hdd2
-chown 1000:1000 /mnt/hdd0 /mnt/hdd1 /mnt/hdd2
+chown "$STORAGE_UID:$STORAGE_GID" /mnt/hdd0 /mnt/hdd1 /mnt/hdd2
 
 echo "Verifying SSD mounts..."
 findmnt /mnt/hdd0 >/dev/null
@@ -60,6 +69,7 @@ if ! findmnt -T /mnt/storage -t fuse.mergerfs >/dev/null; then
     mount | grep -E "/mnt/hdd|/mnt/storage" || true
     exit 1
 fi
+chown "$STORAGE_UID:$STORAGE_GID" /mnt/storage
 
 echo "Mounted storage pool:"
 findmnt /mnt/hdd0 /mnt/hdd1 /mnt/hdd2 /mnt/storage || true

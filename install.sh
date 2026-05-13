@@ -54,9 +54,10 @@ sudo chmod +x /usr/local/sbin/mount-storage-pool.sh
 
 # systemd services - substitute detected interface name
 sed "s/eno1/$CAMERA_IFACE/g" "$REPO_DIR/startup_scripts/ptp4l.service" | sudo tee /etc/systemd/system/ptp4l.service > /dev/null
-sudo cp "$REPO_DIR/startup_scripts/storage-pool.service" /etc/systemd/system/
-sudo cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/
 CURRENT_USER=$(logname)
+sudo cp "$REPO_DIR/startup_scripts/storage-pool.service" /etc/systemd/system/
+sudo sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/storage-pool.service
+sudo cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/
 sudo sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/tankervision.service
 sudo cp "$REPO_DIR/startup_scripts/gnss-record.service" /etc/systemd/system/
 sudo cp "$REPO_DIR/startup_scripts/gnss_record.sh" /usr/local/bin/gnss_record.sh

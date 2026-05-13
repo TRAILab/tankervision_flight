@@ -103,6 +103,9 @@ info "  ptp4l.service"
 
 # tankervision — always write fresh from template then substitute user
 CURRENT_USER=$(logname 2>/dev/null || echo "${SUDO_USER:-trail}")
+cp "$REPO_DIR/startup_scripts/storage-pool.service" /etc/systemd/system/storage-pool.service
+sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/storage-pool.service
+info "  storage-pool.service (user: $CURRENT_USER)"
 cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/tankervision.service
 sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/tankervision.service
 info "  tankervision.service (user: $CURRENT_USER)"
@@ -115,7 +118,6 @@ sudo -u "$CURRENT_USER" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$
 
 # remaining active services — copy as-is
 for SVC in \
-    storage-pool.service \
     gpsd-chrony.service \
     gnss-record.service
 do
