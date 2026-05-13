@@ -9,8 +9,6 @@
 
 namespace
 {
-constexpr int kScale = 8;
-
 uint16_t* d_bayer = nullptr;
 uint8_t* d_bgr = nullptr;
 size_t d_bayer_bytes = 0;
@@ -59,13 +57,14 @@ __device__ uint8_t average_to_u8(uint32_t sum, uint32_t count, int raw_shift)
   return static_cast<uint8_t>(value > 255u ? 255u : value);
 }
 
-__global__ void bayer_rggb16_downscale8_to_bgr8_kernel(
+__global__ void bayer_rggb16_downscale_to_bgr8_kernel(
     const uint16_t* __restrict__ bayer,
     int input_width,
     int input_height,
     uint8_t* __restrict__ bgr,
     int output_width,
     int output_height,
+    int scale,
     int raw_shift)
 {
   const int ox = blockIdx.x * blockDim.x + threadIdx.x;
@@ -74,8 +73,8 @@ __global__ void bayer_rggb16_downscale8_to_bgr8_kernel(
     return;
   }
 
-  const int sx0 = ox * kScale;
-  const int sy0 = oy * kScale;
+  const int sx0 = ox * scale;
+  const int sy0 = oy * scale;
   uint32_t r_sum = 0;
   uint32_t g_sum = 0;
   uint32_t b_sum = 0;
@@ -83,7 +82,7 @@ __global__ void bayer_rggb16_downscale8_to_bgr8_kernel(
   uint32_t g_count = 0;
   uint32_t b_count = 0;
 
-  for (int dy = 0; dy < kScale; ++dy) {
+  for (int dy = 0; dy < scale; ++dy) {
     const int sy = sy0 + dy;
     if (sy >= input_height) {
       continue;
@@ -91,7 +90,7 @@ __global__ void bayer_rggb16_downscale8_to_bgr8_kernel(
 
     const bool even_row = (sy & 1) == 0;
     const uint16_t* row = bayer + sy * input_width;
-    for (int dx = 0; dx < kScale; ++dx) {
+    for (int dx = 0; dx < scale; ++dx) {
       const int sx = sx0 + dx;
       if (sx >= input_width) {
         continue;
@@ -120,13 +119,14 @@ __global__ void bayer_rggb16_downscale8_to_bgr8_kernel(
 
 }  // namespace
 
-bool bayer_rggb16_downscale8_to_bgr8_cuda(
+bool bayer_rggb16_downscale_to_bgr8_cuda(
     const uint16_t* host_bayer,
     int input_width,
     int input_height,
     uint8_t* host_bgr,
     int output_width,
     int output_height,
+    int scale,
     int raw_shift,
     std::string* error_message)
 {
@@ -142,6 +142,10 @@ bool bayer_rggb16_downscale8_to_bgr8_cuda(
   }
   if (input_width <= 0 || input_height <= 0 || output_width <= 0 || output_height <= 0) {
     set_error("invalid input or output dimensions");
+    return false;
+  }
+  if (scale <= 0 || (scale % 2) != 0) {
+    set_error("invalid downscale factor");
     return false;
   }
 
@@ -174,13 +178,14 @@ bool bayer_rggb16_downscale8_to_bgr8_cuda(
       (output_width + block.x - 1) / block.x,
       (output_height + block.y - 1) / block.y);
 
-  bayer_rggb16_downscale8_to_bgr8_kernel<<<grid, block>>>(
+  bayer_rggb16_downscale_to_bgr8_kernel<<<grid, block>>>(
       d_bayer,
       input_width,
       input_height,
       d_bgr,
       output_width,
       output_height,
+      scale,
       raw_shift);
 
   error = cudaGetLastError();

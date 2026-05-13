@@ -124,7 +124,7 @@ class ArenaCameraNode : public rclcpp::Node
   std::atomic<uint64_t> timing_frame_count_{0};
   std::atomic<uint64_t> publish_timing_frame_count_{0};
   int bayer_raw_shift_{8};
-  static constexpr size_t kPublishDownscaleFactor = 8;
+  size_t publish_downscale_factor_{8};
 
   // ROI
   size_t width_{0};

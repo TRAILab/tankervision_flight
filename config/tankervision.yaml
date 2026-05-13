@@ -30,6 +30,7 @@ lucid_camera:
   hardware_trigger: on_pps
   pixelformat: bayer_rggb16
   bayer_raw_shift: 8
+  publish_downscale_factor: 8
   acquisition_frame_rate_enable: true
   acquisition_frame_rate: 1.0
   qos_reliability: reliable

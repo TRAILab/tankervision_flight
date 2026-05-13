@@ -91,6 +91,7 @@ def _launch_lucid_camera(_):
             {'height':                    lucid.get('height',                     4600)},
             {'pixelformat':               lucid.get('pixelformat',               'bayer_rggb16')},
             {'bayer_raw_shift':           int(lucid.get('bayer_raw_shift',        8))},
+            {'publish_downscale_factor':  int(lucid.get('publish_downscale_factor', 8))},
             {'hardware_trigger':          ht_bool},
             {'acquisition_frame_rate_enable': _as_bool(lucid.get('acquisition_frame_rate_enable', True), True)},
             {'acquisition_frame_rate':     float(lucid.get('acquisition_frame_rate', 1.0))},

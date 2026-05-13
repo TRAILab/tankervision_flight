@@ -90,6 +90,14 @@ void ArenaCameraNode::parse_parameters_()
     nextParameterToDeclare = "bayer_raw_shift";
     bayer_raw_shift_ = this->declare_parameter<int>("bayer_raw_shift", 8);
 
+    nextParameterToDeclare = "publish_downscale_factor";
+    const int publish_downscale_factor =
+        this->declare_parameter<int>("publish_downscale_factor", 8);
+    if (publish_downscale_factor <= 0 || (publish_downscale_factor % 2) != 0) {
+      throw std::runtime_error("publish_downscale_factor must be a positive even number");
+    }
+    publish_downscale_factor_ = static_cast<size_t>(publish_downscale_factor);
+
   } catch (rclcpp::ParameterTypeException& e) {
     log_err(nextParameterToDeclare + " argument");
     throw;
@@ -602,8 +610,8 @@ void ArenaCameraNode::resize_and_publish_worker_()
     const auto dequeue_time = std::chrono::steady_clock::now();
     const double queue_wait_ms = elapsed_ms(frame.queued_at, dequeue_time);
 
-    const size_t output_width = frame.width / kPublishDownscaleFactor;
-    const size_t output_height = frame.height / kPublishDownscaleFactor;
+    const size_t output_width = frame.width / publish_downscale_factor_;
+    const size_t output_height = frame.height / publish_downscale_factor_;
     if (output_width == 0 || output_height == 0) {
       log_warn(
           "Skipping image with invalid downscaled size from " +
@@ -614,13 +622,14 @@ void ArenaCameraNode::resize_and_publish_worker_()
     std::vector<uint8_t> bgr_downscaled(output_width * output_height * 3U);
     std::string cuda_error;
     const auto cuda_start = std::chrono::steady_clock::now();
-    const bool cuda_ok = bayer_rggb16_downscale8_to_bgr8_cuda(
+    const bool cuda_ok = bayer_rggb16_downscale_to_bgr8_cuda(
         frame.bayer.data(),
         static_cast<int>(frame.width),
         static_cast<int>(frame.height),
         bgr_downscaled.data(),
         static_cast<int>(output_width),
         static_cast<int>(output_height),
+        static_cast<int>(publish_downscale_factor_),
         bayer_raw_shift_,
         &cuda_error);
     const double cuda_process_ms = elapsed_ms(cuda_start, std::chrono::steady_clock::now());

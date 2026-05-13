@@ -535,6 +535,7 @@ class StatusNode(Node):
                 f'-p height:={lucid.get("height", 4600)} '
                 f'-p pixelformat:={lucid.get("pixelformat", "bayer_rggb16")} '
                 f'-p bayer_raw_shift:={int(lucid.get("bayer_raw_shift", 8))} '
+                f'-p publish_downscale_factor:={int(lucid.get("publish_downscale_factor", 8))} '
                 f'-p qos_reliability:={lucid.get("qos_reliability", "reliable")} '
                 f'-p exposure_auto:={lucid.get("exposure_auto", "Continuous")} '
                 f'-p gain_auto:={lucid.get("gain_auto", "Continuous")} '

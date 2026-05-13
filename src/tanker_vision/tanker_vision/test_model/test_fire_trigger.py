@@ -6,7 +6,7 @@ import cv2
 from ultralytics import YOLO
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 MODEL_PATH = REPO_ROOT / "src/tanker_vision/tanker_vision/fire_detection.pt"
 IMAGE_PATH = REPO_ROOT / "src/tanker_vision/tanker_vision/test_model/images/smoke.png"
 
