@@ -523,9 +523,6 @@ class StatusNode(Node):
             lucid = self._cfg.get('lucid_camera', {})
             cfg_path  = self.get_parameter('config').get_parameter_value().string_value
             unit_path = self.get_parameter('unit_config').get_parameter_value().string_value
-            frame_rate_enable = str(
-                as_bool(lucid.get('acquisition_frame_rate_enable', True), True)
-            ).lower()
 
             cmd = (
                 'source /opt/ros/humble/setup.bash && '
@@ -538,8 +535,6 @@ class StatusNode(Node):
                 f'-p height:={lucid.get("height", 4600)} '
                 f'-p pixelformat:={lucid.get("pixelformat", "bayer_rggb16")} '
                 f'-p bayer_raw_shift:={int(lucid.get("bayer_raw_shift", 8))} '
-                f'-p acquisition_frame_rate_enable:={frame_rate_enable} '
-                f'-p acquisition_frame_rate:={float(lucid.get("acquisition_frame_rate", 1.0))} '
                 f'-p qos_reliability:={lucid.get("qos_reliability", "reliable")} '
                 f'-p exposure_auto:={lucid.get("exposure_auto", "Continuous")} '
                 f'-p gain_auto:={lucid.get("gain_auto", "Continuous")} '
