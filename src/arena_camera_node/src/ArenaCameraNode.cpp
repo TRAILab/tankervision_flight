@@ -474,25 +474,25 @@ void ArenaCameraNode::publish_images_()
             CV_8UC3,
             const_cast<uint8_t*>(converted->GetData()));
 
-        cv::Mat bgr_half;
+        cv::Mat bgr_downscaled;
         cv::resize(
-            bgr, bgr_half,
+            bgr, bgr_downscaled,
             cv::Size(
-                static_cast<int>(conv_width / 2),
-                static_cast<int>(conv_height / 2)),
+                static_cast<int>(conv_width / 8),
+                static_cast<int>(conv_height / 8)),
             0.0, 0.0, cv::INTER_AREA);
 
         auto p_image_msg = std::make_unique<sensor_msgs::msg::Image>();
         p_image_msg->header.stamp    = image_stamp;
         p_image_msg->header.frame_id = std::to_string(pImage->GetFrameId());
-        p_image_msg->height   = bgr_half.rows;
-        p_image_msg->width    = bgr_half.cols;
+        p_image_msg->height   = bgr_downscaled.rows;
+        p_image_msg->width    = bgr_downscaled.cols;
         p_image_msg->encoding = sensor_msgs::image_encodings::BGR8;
         p_image_msg->is_bigendian = 0;
-        p_image_msg->step = static_cast<sensor_msgs::msg::Image::_step_type>(bgr_half.step);
-        const size_t img_data_size = bgr_half.total() * bgr_half.elemSize();
+        p_image_msg->step = static_cast<sensor_msgs::msg::Image::_step_type>(bgr_downscaled.step);
+        const size_t img_data_size = bgr_downscaled.total() * bgr_downscaled.elemSize();
         p_image_msg->data.resize(img_data_size);
-        std::memcpy(p_image_msg->data.data(), bgr_half.data, img_data_size);
+        std::memcpy(p_image_msg->data.data(), bgr_downscaled.data, img_data_size);
 
         m_pub_->publish(std::move(p_image_msg));
         {
