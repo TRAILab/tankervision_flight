@@ -504,6 +504,24 @@ class StatusNode(Node):
                         _py_logger.info('PPS still acquired, hardware trigger command already published')
 
     # ─── Cellular Status ─────────────────────────────────────────────────────
+    def _tty_in_use(self, port: str) -> bool:
+        """Best-effort check whether another process already has this tty open."""
+        target = os.path.realpath(port)
+        for pid in os.listdir('/proc'):
+            if not pid.isdigit():
+                continue
+            fd_dir = os.path.join('/proc', pid, 'fd')
+            try:
+                for fd in os.listdir(fd_dir):
+                    try:
+                        if os.path.realpath(os.readlink(os.path.join(fd_dir, fd))) == target:
+                            return True
+                    except OSError:
+                        continue
+            except (FileNotFoundError, PermissionError, ProcessLookupError):
+                continue
+        return False
+
     def _detect_at_port(self) -> str:
         """Probe ttyUSB ports for a cellular modem AT interface.
         Excludes ports already claimed by known sensors (IM19, GNSS).
@@ -513,9 +531,13 @@ class StatusNode(Node):
 
         # Resolve real device paths for known sensor symlinks to exclude them
         excluded = set()
-        for link in ('/dev/im19_mems', '/dev/im19_navi', '/dev/im19_gnss', '/dev/gnss'):
+        for link in (
+            '/dev/gnss_raw',
+            '/dev/im19_mems'
+        ):
             try:
-                excluded.add(os.path.realpath(link))
+                if os.path.exists(link):
+                    excluded.add(os.path.realpath(link))
             except Exception:
                 pass
 
@@ -524,8 +546,11 @@ class StatusNode(Node):
             if os.path.realpath(port) in excluded:
                 _py_logger.info(f'Skipping {port} (known sensor symlink)')
                 continue
+            if self._tty_in_use(port):
+                _py_logger.info(f'Skipping {port} (tty already in use)')
+                continue
             try:
-                with serial.Serial(port, 115200, timeout=1) as s:
+                with serial.Serial(port, 115200, timeout=1, exclusive=True) as s:
                     s.write(b'AT\r\n')
                     time.sleep(0.5)
                     resp = s.read(s.in_waiting).decode(errors='ignore')
