@@ -12,7 +12,10 @@ log() {
 
 configure_device() {
     log "Configuring $GNSS_DEVICE at 921600 baud"
-    stty -F "$GNSS_DEVICE" 921600 raw -echo -ixon -ixoff -icrnl -inlcr -opost
+    stty -F "$GNSS_DEVICE" 921600 raw -echo -ixon -ixoff -icrnl -inlcr -opost clocal -hupcl -crtscts
+    log "Device target: $(readlink -f "$GNSS_DEVICE" 2>/dev/null || echo "$GNSS_DEVICE")"
+    log "Device mode: $(ls -l "$GNSS_DEVICE" 2>/dev/null || true)"
+    log "stty: $(stty -F "$GNSS_DEVICE" -a 2>/dev/null || true)"
 }
 
 while [[ ! -e "$GNSS_DEVICE" ]]; do
