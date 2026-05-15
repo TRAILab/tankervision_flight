@@ -60,6 +60,7 @@ sudo sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/storage-pool.ser
 sudo cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/
 sudo sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/tankervision.service
 sudo cp "$REPO_DIR/startup_scripts/gnss-record.service" /etc/systemd/system/
+sudo sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/gnss-record.service
 sudo cp "$REPO_DIR/startup_scripts/gnss_record.sh" /usr/local/bin/gnss_record.sh
 sudo chmod +x /usr/local/bin/gnss_record.sh
 sudo cp "$REPO_DIR/startup_scripts/gpsd-chrony.service" /etc/systemd/system/

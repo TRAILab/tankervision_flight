@@ -5,6 +5,10 @@ Requires=storage-pool.service
 
 [Service]
 Type=simple
+User=FLIGHT_USER
+Group=FLIGHT_USER
+SupplementaryGroups=dialout
+Environment="HOME=/home/FLIGHT_USER"
 ExecStart=/usr/local/bin/gnss_record.sh
 Restart=on-failure
 RestartSec=5

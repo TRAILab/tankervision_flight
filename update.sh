@@ -109,6 +109,9 @@ info "  storage-pool.service (user: $CURRENT_USER)"
 cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/tankervision.service
 sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/tankervision.service
 info "  tankervision.service (user: $CURRENT_USER)"
+cp "$REPO_DIR/startup_scripts/gnss-record.service" /etc/systemd/system/gnss-record.service
+sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/gnss-record.service
+info "  gnss-record.service (user: $CURRENT_USER)"
 
 sudo -u "$CURRENT_USER" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$CURRENT_USER")/bus" \
     gsettings set org.gnome.desktop.media-handling automount false 2>/dev/null || \
@@ -118,8 +121,7 @@ sudo -u "$CURRENT_USER" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u "$
 
 # remaining active services — copy as-is
 for SVC in \
-    gpsd-chrony.service \
-    gnss-record.service
+    gpsd-chrony.service
 do
     if [[ -f "$REPO_DIR/startup_scripts/$SVC" ]]; then
         cp "$REPO_DIR/startup_scripts/$SVC" /etc/systemd/system/
