@@ -478,10 +478,12 @@ class StatusNode(Node):
             self._executor.submit(self._send_landing_email_bg)
         elif connected and self.send_startup_email and self._session_path:
             self.send_startup_email = False
+            pps_state = self.time_sync_state or 'TIME_SYNC_UNKNOWN'
             body = (
                 f'TankerVision is online.\n'
                 f'Unit: {name} | Plane: {plane} | Mode: {self._mode}\n'
-                f'Session: {self._session_path}'
+                f'Session: {self._session_path}\n'
+                f'Time sync: {pps_state}'
             )
             self._executor.submit(self._send_email, self._email_subject('Online'), body)
 
@@ -501,7 +503,7 @@ class StatusNode(Node):
                         _py_logger.info('PPS acquired, commanding camera hardware trigger mode')
                         self._publish_camera_acquisition_mode('hardware_trigger')
                     else:
-                        _py_logger.info('PPS still acquired, hardware trigger command already published')
+                        _py_logger.debug('PPS re-acquired, hardware trigger already commanded')
 
     # ─── Cellular Status ─────────────────────────────────────────────────────
     def _tty_in_use(self, port: str) -> bool:
@@ -629,8 +631,6 @@ class StatusNode(Node):
 
     def _send_landing_email_bg(self):
         logs = _log_stream.getvalue()
-        _log_stream.truncate(0)
-        _log_stream.seek(0)
 
         # Count raw frames saved in this session
         raw_count = 0
@@ -648,18 +648,28 @@ class StatusNode(Node):
             du_output = f'du error: {e.output or e}'
 
         maxvis_str = 'YES — signal detected this session' if self._maxvis_ever_active else 'NO — no signal detected'
+        free_pct = get_free_space_percentage(self._storage_root)
 
         body = (
             f'The plane has landed.\n\n'
             f'=== SESSION SUMMARY ===\n'
-            f'Session folder : {self._session_path}\n'
-            f'Raw images saved: {raw_count}\n'
-            f'Recordings      : {self._record_count}\n'
-            f'MaxVis active   : {maxvis_str}\n\n'
+            f'Session folder   : {self._session_path}\n'
+            f'Raw images saved : {raw_count}\n'
+            f'Recordings       : {self._record_count}\n'
+            f'MaxVis active    : {maxvis_str}\n'
+            f'Storage free     : {free_pct}%\n\n'
             f'=== NODE LOGS ===\n{logs}\n\n'
             f'=== STORAGE USAGE ===\n{du_output}'
         )
-        self._send_email(self._email_subject('Landing Alert'), body)
+
+        subject = self._email_subject('Landing Alert')
+        try:
+            send_email(subject, body, **self._email_creds)
+            _py_logger.info(f'Email sent: {subject}')
+            _log_stream.truncate(0)
+            _log_stream.seek(0)
+        except EmailError as e:
+            _py_logger.error(f'Email failed ({subject}): {e}')
 
 
 def main(args=None):

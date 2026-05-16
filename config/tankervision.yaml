@@ -11,9 +11,9 @@ notifications:
 # takeoff_delay: 300  = turn off 300 seconds after node starts (regardless of flight state)
 #                'in_air' = turn off when speed >14m/s detected
 cellular:
-  manage: false
-  # at_port: /dev/ttyUSB5  # optional — auto-detected from ttyUSB ports if not set
-  takeoff_delay: 300
+  manage: true
+  #at_port: /dev/ttyUSB5  # optional — auto-detected from ttyUSB ports if not set
+  takeoff_delay: in_air
 
 storage:
   root: /mnt/storage
