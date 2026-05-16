@@ -55,7 +55,7 @@ maxvis_recording:
 
 yolo:
   model: src/tanker_vision/tanker_vision/fire_detection.pt
-  target_class: 10
+  target_class: 2
   confidence: 0.3
  
 ptp:
