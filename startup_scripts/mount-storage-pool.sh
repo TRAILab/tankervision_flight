@@ -21,6 +21,11 @@ case "$STORAGE_USER" in
         UUID1="b1614b8f-8468-4485-bddd-4b5614fe497e"
         UUID2="faa4aec5-e19e-4e50-9325-6f14b7ce7368"
         ;;
+    helios)
+        UUID0="b69f553b-b3a0-4ea6-a8c2-aceb2b45f988"
+        UUID1="d47b873b-8289-4db4-be48-a105dc508622"
+        UUID2="c55cf816-839b-4f0e-b83f-9535db6711be"
+        ;;
     *)
         echo "ERROR: No storage UUID mapping configured for STORAGE_USER='${STORAGE_USER:-unset}'"
         echo "Add this flight user's hdd0/hdd1/hdd2 UUIDs to $0."
