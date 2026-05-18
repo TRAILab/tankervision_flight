@@ -62,6 +62,15 @@ umount /mnt/hdd0 2>/dev/null || true
 umount /mnt/hdd1 2>/dev/null || true
 umount /mnt/hdd2 2>/dev/null || true
 
+if [[ -d /mnt/storage ]] && [[ -n "$(find /mnt/storage -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+    STALE_STORAGE="/mnt/storage.stale.$(date +%Y%m%d_%H%M%S)"
+    echo "WARNING: /mnt/storage is not mounted and is not empty."
+    echo "Moving stale pre-mount contents to $STALE_STORAGE"
+    mv /mnt/storage "$STALE_STORAGE"
+    mkdir -p /mnt/storage
+    chown "$STORAGE_UID:$STORAGE_GID" /mnt/storage
+fi
+
 echo "Mounting SSDs..."
 mount -t ext4 -o defaults,noatime /dev/disk/by-uuid/$UUID0 /mnt/hdd0
 mount -t ext4 -o defaults,noatime /dev/disk/by-uuid/$UUID1 /mnt/hdd1
