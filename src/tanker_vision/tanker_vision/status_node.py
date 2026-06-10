@@ -205,7 +205,8 @@ class StatusNode(Node):
         # Flight detection thresholds
         _vel_cfg = self._cfg.get('velocity', {})
         self._takeoff_threshold = float(_vel_cfg.get('takeoff_threshold_m_s', 14.0))
-        self._landing_threshold = float(_vel_cfg.get('landing_threshold_m_s', 1.0))
+        self._landing_threshold = float(_vel_cfg.get('landing_max_threshold_m_s', 1.0))
+        self._landing_min = float(_vel_cfg.get('landing_min_threshold_m_s'), 0.005)
         _py_logger.info(
             f'Velocity thresholds — takeoff: {self._takeoff_threshold} m/s, '
             f'landing: {self._landing_threshold} m/s'
@@ -610,7 +611,7 @@ class StatusNode(Node):
                 int(_td)  # timer mode — cellular already scheduled at boot, nothing to do
             except (ValueError, TypeError):
                 self._executor.submit(self._cellular_off)  # in_air mode
-        elif mag < self._landing_threshold and self.is_in_air:
+        elif mag < self._landing_threshold and mag > self._landing_min and self.is_in_air:
             self.is_in_air = False
             _py_logger.info(f'Landing detected: {mag:.2f} m/s')
             self.send_landing_email = True

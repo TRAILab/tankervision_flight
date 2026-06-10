@@ -27,7 +27,7 @@ lucid_camera:
   topic: /cam0/image_raw
   width: 5320
   height: 4600
-  hardware_trigger: on_pps
+  hardware_trigger: false
   pixelformat: bayer_rggb16
   bayer_raw_shift: 8
   publish_downscale_factor: 8
@@ -67,4 +67,5 @@ gpsd_velocity:
 
 velocity:
   takeoff_threshold_m_s: 14
-  landing_threshold_m_s: 1
+  landing_max_threshold_m_s: 1
+  landing_min_threshold_m_s: 0.005
