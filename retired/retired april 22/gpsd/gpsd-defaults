@@ -1,4 +1,0 @@
-START_DAEMON="true"
-USBAUTO="false"
-DEVICES="/dev/ttyACM0 /dev/pps1"
-GPSD_OPTIONS="-n"
