@@ -206,7 +206,7 @@ class StatusNode(Node):
         _vel_cfg = self._cfg.get('velocity', {})
         self._takeoff_threshold = float(_vel_cfg.get('takeoff_threshold_m_s', 14.0))
         self._landing_threshold = float(_vel_cfg.get('landing_max_threshold_m_s', 1.0))
-        self._landing_min = float(_vel_cfg.get('landing_min_threshold_m_s'), 0.005)
+        self._landing_min = float(_vel_cfg.get('landing_min_threshold_m_s', 0.005))
         _py_logger.info(
             f'Velocity thresholds — takeoff: {self._takeoff_threshold} m/s, '
             f'landing: {self._landing_threshold} m/s'
