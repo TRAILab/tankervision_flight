@@ -136,7 +136,7 @@ def get_free_space_percentage(path: str = '/') -> str:
 
 
 def is_disk_mounted(mount_point: str = '/mnt/storage') -> bool:
-    return os.path.ismount(mount_point)
+    return os.path.isdir(mount_point)
 
 
 def as_bool(value, default=False) -> bool:
