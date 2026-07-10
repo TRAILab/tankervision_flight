@@ -365,6 +365,7 @@ copy_and_remove_flight() {
         --acls \
         --xattrs \
         --checksum \
+        --checksum-choice=xxh128 \
         --dry-run \
         --itemize-changes \
         --out-format='%i %n%L' \
