@@ -170,9 +170,11 @@ setup_mounts() {
         return 1
     fi
 
-    # Confirm mergerfs is immediately responsive before starting the watchdog.
-    if ! timeout "$WATCHDOG_PROBE_TIMEOUT" stat "$DEST_MOUNT" >/dev/null 2>&1; then
-        log "ERROR: mergerfs unresponsive immediately after mount"
+    # Confirm mergerfs is immediately responsive with a real write before starting the watchdog.
+    if ! timeout "$WATCHDOG_PROBE_TIMEOUT" \
+        bash -c "touch '${DEST_MOUNT}/.watchdog_probe' && rm -f '${DEST_MOUNT}/.watchdog_probe'" \
+        >/dev/null 2>&1; then
+        log "ERROR: mergerfs I/O probe failed immediately after mount"
         return 1
     fi
 
@@ -208,10 +210,13 @@ _watchdog_body() {
             fi
         done
 
-        # Timed probe: actually touch the FUSE layer.
+        # Timed write probe: forces real block device I/O through mergerfs.
+        # A plain stat answers from FUSE memory without hitting the SSD.
         if [[ "$problem" == false ]]; then
-            if ! timeout "$WATCHDOG_PROBE_TIMEOUT" stat "$DEST_MOUNT" >/dev/null 2>&1; then
-                log "[watchdog] mergerfs probe timed out or failed"
+            if ! timeout "$WATCHDOG_PROBE_TIMEOUT" \
+                bash -c "touch '${DEST_MOUNT}/.watchdog_probe' && rm -f '${DEST_MOUNT}/.watchdog_probe'" \
+                >/dev/null 2>&1; then
+                log "[watchdog] mergerfs I/O probe timed out or failed"
                 problem=true
             fi
         fi
