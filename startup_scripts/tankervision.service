@@ -1,7 +1,7 @@
 [Unit]
 Description=TankerVision ROS2 Flight Launch
-After=network.target gpsd-chrony.service ptp4l.service storage-pool.service
-Requires=ptp4l.service storage-pool.service
+After=network.target gpsd-chrony.service ptp4l.service
+Requires=ptp4l.service
 
 
 [Service]

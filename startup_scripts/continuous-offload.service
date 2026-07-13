@@ -1,0 +1,17 @@
+[Unit]
+Description=Continuous flight data offload to SSD pool
+After=local-fs.target
+
+[Service]
+Type=simple
+Environment="STORAGE_USER=FLIGHT_USER"
+ExecStart=/usr/local/sbin/continuous_offload.sh
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -25,7 +25,11 @@ set -uo pipefail
 # --------------------------------------------------------------------------
 # Per-unit SSD UUID configuration (keyed by hostname)
 # --------------------------------------------------------------------------
-UNIT="$(hostname -s)"
+UNIT="${STORAGE_USER:-}"
+if [[ -z "$UNIT" ]]; then
+    printf '%s: ERROR: STORAGE_USER is not set\n' "$(date '+%F %T')" >&2
+    exit 1
+fi
 
 case "$UNIT" in
     brigid)
@@ -65,8 +69,8 @@ SOURCE_ROOT="/home/${UNIT}/storage"
 DEST_MOUNT="/mnt/storage"
 
 # A flight must have no modifications for this many minutes before it is
-# eligible for transfer.
-MINIMUM_AGE_MINUTES=10
+# eligible for transfer. (24hrs)
+MINIMUM_AGE_MINUTES=$((60 * 24))
 
 # Seconds between scans when the pool is healthy and transfers are complete.
 SCAN_DELAY=60
@@ -263,11 +267,19 @@ storage_healthy() {
 
 flight_is_old_enough() {
     local flight_directory="$1"
-    ! find "$flight_directory" \
-        -mmin "-${MINIMUM_AGE_MINUTES}" \
-        -print -quit \
-        2>/dev/null |
-        grep -q .
+    local recent
+
+    recent="$(
+        find "$flight_directory" \
+            -xdev \
+            -mmin "-${MINIMUM_AGE_MINUTES}" \
+            -print -quit
+    )" || {
+        log "ERROR: Could not inspect age of $flight_directory"
+        return 1
+    }
+
+    [[ -z "$recent" ]]
 }
 
 source_fingerprint() {

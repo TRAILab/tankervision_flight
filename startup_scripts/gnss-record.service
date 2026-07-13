@@ -1,7 +1,6 @@
 [Unit]
 Description=GNSS Raw Data Recorder
-After=storage-pool.service tankervision.service
-Requires=storage-pool.service
+After=tankervision.service
 
 [Service]
 Type=simple

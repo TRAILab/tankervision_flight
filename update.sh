@@ -87,9 +87,9 @@ if [[ -f "$REPO_DIR/startup_scripts/gpsd-chrony-restart.sh" ]]; then
     cp "$REPO_DIR/startup_scripts/gpsd-chrony-restart.sh" /usr/local/bin/gpsd-chrony-restart.sh
     chmod +x /usr/local/bin/gpsd-chrony-restart.sh
 fi
-if [[ -f "$REPO_DIR/startup_scripts/mount-storage-pool.sh" ]]; then
-    cp "$REPO_DIR/startup_scripts/mount-storage-pool.sh" /usr/local/sbin/mount-storage-pool.sh
-    chmod +x /usr/local/sbin/mount-storage-pool.sh
+if [[ -f "$REPO_DIR/startup_scripts/continuous_offload.sh" ]]; then
+    cp "$REPO_DIR/startup_scripts/continuous_offload.sh" /usr/local/sbin/continuous_offload.sh
+    chmod +x /usr/local/sbin/continuous_offload.sh
 fi
 info "  helper scripts"
 
@@ -101,11 +101,10 @@ sed "s/eno1/$CAMERA_IFACE/g" "$REPO_DIR/startup_scripts/ptp4l.service" \
     | tee /etc/systemd/system/ptp4l.service > /dev/null
 info "  ptp4l.service"
 
-# tankervision — always write fresh from template then substitute user
 CURRENT_USER=$(logname 2>/dev/null || echo "${SUDO_USER:-trail}")
-cp "$REPO_DIR/startup_scripts/storage-pool.service" /etc/systemd/system/storage-pool.service
-sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/storage-pool.service
-info "  storage-pool.service (user: $CURRENT_USER)"
+cp "$REPO_DIR/startup_scripts/continuous-offload.service" /etc/systemd/system/continuous-offload.service
+sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/continuous-offload.service
+info "  continuous-offload.service (user: $CURRENT_USER)"
 cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/tankervision.service
 sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/tankervision.service
 info "  tankervision.service (user: $CURRENT_USER)"
@@ -136,9 +135,14 @@ systemctl disable --now gpsd.service chrony 2>/dev/null || true
 systemctl disable gpsd.socket || true
 systemctl mask gpsd.socket || true
 
+# Remove the old storage-pool service if it exists
+systemctl disable --now storage-pool.service 2>/dev/null || true
+systemctl mask storage-pool.service 2>/dev/null || true
+rm -f /etc/systemd/system/storage-pool.service
+
 # Services that must always be enabled
 for SVC in \
-    storage-pool.service \
+    continuous-offload.service \
     gpsd-chrony.service \
     ptp4l.service \
     tankervision.service \
@@ -170,7 +174,7 @@ restart_svc() {
 restart_svc gpsd-chrony.service
 restart_svc ptp4l.service
 systemctl stop tankervision.service gnss-record.service 2>/dev/null || true
-restart_svc storage-pool.service
+restart_svc continuous-offload.service
 
 # ── 5. Rebuild ROS2 workspace ─────────────────────────────────────
 info "Building ROS2 workspace..."
@@ -202,7 +206,7 @@ restart_svc gnss-record.service
 echo ""
 info "Done. Active service status:"
 for SVC in \
-    storage-pool.service \
+    continuous-offload.service \
     gpsd-chrony.service \
     ptp4l.service \
     tankervision.service \
