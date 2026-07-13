@@ -49,14 +49,13 @@ sudo udevadm trigger
 # scripts
 sudo cp "$REPO_DIR/scripts/configure-dfg-camera.sh" /usr/local/bin/configure-dfg-camera.sh
 sudo chmod +x /usr/local/bin/configure-dfg-camera.sh
-sudo cp "$REPO_DIR/startup_scripts/mount-storage-pool.sh" /usr/local/sbin/mount-storage-pool.sh
-sudo chmod +x /usr/local/sbin/mount-storage-pool.sh
-
 # systemd services - substitute detected interface name
 sed "s/eno1/$CAMERA_IFACE/g" "$REPO_DIR/startup_scripts/ptp4l.service" | sudo tee /etc/systemd/system/ptp4l.service > /dev/null
 CURRENT_USER=$(logname)
-sudo cp "$REPO_DIR/startup_scripts/storage-pool.service" /etc/systemd/system/
-sudo sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/storage-pool.service
+sudo cp "$REPO_DIR/startup_scripts/continuous-offload.service" /etc/systemd/system/
+sudo sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/continuous-offload.service
+sudo cp "$REPO_DIR/startup_scripts/continuous_offload.sh" /usr/local/sbin/continuous_offload.sh
+sudo chmod +x /usr/local/sbin/continuous_offload.sh
 sudo cp "$REPO_DIR/startup_scripts/tankervision.service" /etc/systemd/system/
 sudo sed -i "s/FLIGHT_USER/$CURRENT_USER/g" /etc/systemd/system/tankervision.service
 sudo cp "$REPO_DIR/startup_scripts/gnss-record.service" /etc/systemd/system/
@@ -90,7 +89,7 @@ sudo systemctl disable --now gpsd.service chrony 2>/dev/null || true
 sudo systemctl disable gpsd.socket || true
 sudo systemctl mask gpsd.socket || true
 for SVC in \
-    storage-pool.service \
+    continuous-offload.service \
     gpsd-chrony.service \
     ptp4l.service \
     tankervision.service \

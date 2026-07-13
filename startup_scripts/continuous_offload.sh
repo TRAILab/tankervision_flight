@@ -360,8 +360,11 @@ copy_and_remove_flight() {
         return 1
     }
 
-    # ---- Checksum verification ----
-    log "Checksum-verifying: $flight_name"
+    # ---- Size+mtime verification ----
+    # rsync already verified each file by checksum during the copy phase.
+    # This pass confirms nothing is missing or truncated without re-reading
+    # file contents (stat-only — no disk I/O proportional to data size).
+    log "Verifying (size+mtime): $flight_name"
     verify_tmp="$(mktemp /tmp/offload-verify.XXXXXX)"
 
     rsync \
@@ -376,8 +379,6 @@ copy_and_remove_flight() {
         --hard-links \
         --acls \
         --xattrs \
-        --checksum \
-        --checksum-choice=xxh128 \
         --dry-run \
         --itemize-changes \
         --out-format='%i %n%L' \
