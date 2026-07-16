@@ -73,14 +73,6 @@ else
     warn "  Skipping ptp4l.conf — not found in repo"
 fi
 
-# GigE camera interface — MTU 9000 for jumbo frames
-if nmcli connection show "$CAMERA_IFACE" &>/dev/null; then
-    nmcli connection modify "$CAMERA_IFACE" ethernet.mtu 9000
-    info "  $CAMERA_IFACE MTU 9000"
-else
-    warn "  $CAMERA_IFACE nmcli profile not found — run install.sh first"
-fi
-
 # udev rules
 cp_config "$REPO_DIR/config/udev/99-dfg-camera.rules" /etc/udev/rules.d/99-dfg-camera.rules
 udevadm control --reload-rules

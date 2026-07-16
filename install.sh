@@ -77,15 +77,13 @@ if nmcli connection show "$CAMERA_IFACE" &>/dev/null; then
     sudo nmcli connection modify "$CAMERA_IFACE" ipv4.gateway ""
     sudo nmcli connection modify "$CAMERA_IFACE" ipv6.method ignore
     sudo nmcli connection modify "$CAMERA_IFACE" connection.autoconnect yes
-    sudo nmcli connection modify "$CAMERA_IFACE" ethernet.mtu 9000
 else
     echo "[install] Creating $CAMERA_IFACE profile..."
     sudo nmcli connection add type ethernet ifname "$CAMERA_IFACE" con-name "$CAMERA_IFACE" \
         ipv4.method manual ipv4.addresses 169.254.0.1/16 \
         ipv4.gateway "" \
         ipv6.method ignore \
-        connection.autoconnect yes \
-        ethernet.mtu 9000
+        connection.autoconnect yes
 fi
 sudo nmcli connection up "$CAMERA_IFACE" || true
 

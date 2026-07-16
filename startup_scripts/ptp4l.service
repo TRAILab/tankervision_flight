@@ -5,6 +5,9 @@ Requires=gpsd-chrony.service
 
 [Service]
 Type=simple
+ExecStartPre=/usr/sbin/ip link set dev eno1 down
+ExecStartPre=/usr/sbin/ip link set dev eno1 mtu 9000
+ExecStartPre=/usr/sbin/ip link set dev eno1 up
 ExecStart=/usr/sbin/ptp4l -i eno1 -f /etc/linuxptp/ptp4l.conf -m -S
 Restart=always
 RestartSec=5
