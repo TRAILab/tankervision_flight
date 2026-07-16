@@ -1,24 +1,21 @@
 ETHERNET_PORT CONFIG
 These are tips from the ARENA SDK documentation for Linux to achieve best communication possible over ethernet.
 
-CHECK eno1 PARAMS (port closest to power): These should all be set correctly on startup, but feel free to check. 
+CHECK eno1 PARAMS (port closest to power): These should all be set correctly on startup, but feel free to check.
 
-ip link show eno1 
+ip link show eno1
 	- should show mtu 9000
-	
-The mtu setting is not persistent, so it has to be configured on startup through the following service
+	- MTU is persistent via NetworkManager (set by install.sh / update.sh)
 
-sudo systemctl status setup_eno1.service
-
-This service also starts software PTP on eno1
-	
 ethtool -g eno1
-	- verify RX and TX ring entries are maxed
+	- RX and TX max is 1024 on this hardware; current settings should already be at max by default
+	- No manual configuration needed
 
-This config file below is resposible for network memory settings
+This config file below is responsible for network memory settings
 sudo nano /etc/sysctl.d/99-custom.conf
 
 sysctl net.core.rmem_default
 sysctl net.core.rmem_max
 	- Confirm you get 33554432
+	- Deployed automatically by install.sh / update.sh
 

@@ -2,7 +2,7 @@
 # update.sh — Deploy config and code changes to this flight unit.
 #
 # Run after every `git pull` to propagate repo changes to the system.
-# Safe to run repeatedly. Does NOT install packages or modify nmcli profiles.
+# Safe to run repeatedly. Does NOT install packages.
 # For first-time machine setup, run install.sh instead.
 #
 # Usage: sudo ./update.sh
@@ -52,6 +52,11 @@ cp_config() {
 cp_config "$REPO_DIR/config/chrony/chrony.conf" /etc/chrony/chrony.conf
 info "  chrony.conf"
 
+# GigE camera socket buffer settings (32MB recv buffers)
+cp_config "$REPO_DIR/startup_scripts/99-custom.conf" /etc/sysctl.d/99-custom.conf
+sysctl -p /etc/sysctl.d/99-custom.conf > /dev/null
+info "  99-custom.conf (socket buffers)"
+
 # gpsd
 mkdir -p /etc/systemd/system/gpsd.service.d/
 cp_config "$REPO_DIR/config/gpsd/gpsd-service-override.conf" /etc/systemd/system/gpsd.service.d/override.conf
@@ -66,6 +71,14 @@ if [[ -f "$REPO_DIR/config/ptp/ptp4l.conf" ]]; then
     info "  ptp4l.conf (iface: $CAMERA_IFACE)"
 else
     warn "  Skipping ptp4l.conf — not found in repo"
+fi
+
+# GigE camera interface — MTU 9000 for jumbo frames
+if nmcli connection show "$CAMERA_IFACE" &>/dev/null; then
+    nmcli connection modify "$CAMERA_IFACE" ethernet.mtu 9000
+    info "  $CAMERA_IFACE MTU 9000"
+else
+    warn "  $CAMERA_IFACE nmcli profile not found — run install.sh first"
 fi
 
 # udev rules

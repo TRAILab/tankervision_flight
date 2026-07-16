@@ -32,6 +32,10 @@ sudo sed -i -E \
 # chrony
 sudo cp "$REPO_DIR/config/chrony/chrony.conf" /etc/chrony/chrony.conf
 
+# GigE camera socket buffer settings (32MB recv buffers)
+sudo cp "$REPO_DIR/startup_scripts/99-custom.conf" /etc/sysctl.d/99-custom.conf
+sudo sysctl -p /etc/sysctl.d/99-custom.conf
+
 # gpsd
 sudo mkdir -p /etc/systemd/system/gpsd.service.d/
 sudo cp "$REPO_DIR/config/gpsd/gpsd-service-override.conf" /etc/systemd/system/gpsd.service.d/override.conf
@@ -73,13 +77,15 @@ if nmcli connection show "$CAMERA_IFACE" &>/dev/null; then
     sudo nmcli connection modify "$CAMERA_IFACE" ipv4.gateway ""
     sudo nmcli connection modify "$CAMERA_IFACE" ipv6.method ignore
     sudo nmcli connection modify "$CAMERA_IFACE" connection.autoconnect yes
+    sudo nmcli connection modify "$CAMERA_IFACE" ethernet.mtu 9000
 else
     echo "[install] Creating $CAMERA_IFACE profile..."
     sudo nmcli connection add type ethernet ifname "$CAMERA_IFACE" con-name "$CAMERA_IFACE" \
         ipv4.method manual ipv4.addresses 169.254.0.1/16 \
         ipv4.gateway "" \
         ipv6.method ignore \
-        connection.autoconnect yes
+        connection.autoconnect yes \
+        ethernet.mtu 9000
 fi
 sudo nmcli connection up "$CAMERA_IFACE" || true
 
