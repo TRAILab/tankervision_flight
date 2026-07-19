@@ -969,11 +969,23 @@ void ArenaCameraNode::set_nodes_auto_exposure_gain_()
 
   // Set ExposureAuto and GainAuto first — required before
   // TargetBrightness and Gamma become accessible
-  Arena::SetNodeValue<GenICam::gcstring>(nodemap, "ExposureAuto", exposure_auto.c_str());
-  log_info("\tExposureAuto set to " + exposure_auto);
+  try {
+    Arena::SetNodeValue<GenICam::gcstring>(nodemap, "ExposureAuto", exposure_auto.c_str());
+    log_info("\tExposureAuto set to " + exposure_auto);
+  } catch (const std::exception& e) {
+    log_warn(std::string("\tExposureAuto not configurable: ") + e.what());
+  } catch (...) {
+    log_warn("\tExposureAuto not configurable: unknown exception");
+  }
 
-  Arena::SetNodeValue<GenICam::gcstring>(nodemap, "GainAuto", gain_auto.c_str());
-  log_info("\tGainAuto set to " + gain_auto);
+  try {
+    Arena::SetNodeValue<GenICam::gcstring>(nodemap, "GainAuto", gain_auto.c_str());
+    log_info("\tGainAuto set to " + gain_auto);
+  } catch (const std::exception& e) {
+    log_warn(std::string("\tGainAuto not configurable: ") + e.what());
+  } catch (...) {
+    log_warn("\tGainAuto not configurable: unknown exception");
+  }
 
   try {
     Arena::SetNodeValue<int64_t>(nodemap, "TargetBrightness", target_brightness);
