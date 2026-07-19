@@ -181,27 +181,75 @@ restart_svc ptp4l.service
 systemctl stop tankervision.service gnss-record.service 2>/dev/null || true
 restart_svc continuous-offload.service
 
-# ── 5. Rebuild ROS2 workspace ─────────────────────────────────────
-info "Building ROS2 workspace..."
-if [[ -x /usr/local/cuda/bin/nvcc ]]; then
-    export CUDACXX=/usr/local/cuda/bin/nvcc
-    export PATH=/usr/local/cuda/bin:$PATH
-else
+# ── 5. Rebuild ROS2 workspace as the flight user ─────────────────
+info "Building ROS2 workspace as $CURRENT_USER..."
+
+if [[ ! -x /usr/local/cuda/bin/nvcc ]]; then
     error "CUDA compiler not found at /usr/local/cuda/bin/nvcc. Install the Jetson CUDA toolkit/compiler before building arena_camera_node."
 fi
-set +u
-source /opt/ros/humble/setup.bash
-set -u
-cd "$REPO_DIR"
-rm -rf \
-    "$REPO_DIR/build/arena_camera_node" \
-    "$REPO_DIR/install/arena_camera_node" \
-    "$REPO_DIR/build/tanker_vision" \
-    "$REPO_DIR/install/tanker_vision" \
-    "$REPO_DIR/src/tanker_vision/tanker_vision.egg-info"
-colcon build --symlink-install --packages-skip xsens_mti_ros2_driver \
-    --parallel-workers 2 \
-    --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+USER_HOME="$(getent passwd "$CURRENT_USER" | cut -d: -f6)"
+USER_UID="$(id -u "$CURRENT_USER")"
+USER_GID="$(id -g "$CURRENT_USER")"
+
+[[ -n "$USER_HOME" ]] || error "Could not determine home directory for $CURRENT_USER"
+
+CUDSS_LIB="$USER_HOME/.local/lib/python3.10/site-packages/nvidia/cu12/lib"
+
+if [[ ! -f "$CUDSS_LIB/libcudss.so.0" ]]; then
+    error "cuDSS library not found at $CUDSS_LIB/libcudss.so.0"
+fi
+
+# Previous sudo builds may have left root-owned workspace artifacts.
+chown -R "$USER_UID:$USER_GID" "$REPO_DIR"
+
+# Clean selected build artifacts as the normal user.
+sudo -u "$CURRENT_USER" \
+    HOME="$USER_HOME" \
+    rm -rf \
+        "$REPO_DIR/build/arena_camera_node" \
+        "$REPO_DIR/install/arena_camera_node" \
+        "$REPO_DIR/build/im19_ros2" \
+        "$REPO_DIR/install/im19_ros2" \
+        "$REPO_DIR/build/tanker_vision" \
+        "$REPO_DIR/install/tanker_vision" \
+        "$REPO_DIR/src/im19_ros2/im19_ros2.egg-info" \
+        "$REPO_DIR/src/tanker_vision/tanker_vision.egg-info"
+
+# Ensure shared colcon directories remain writable by the normal user.
+mkdir -p "$REPO_DIR/build" "$REPO_DIR/install" "$REPO_DIR/log"
+chown -R "$USER_UID:$USER_GID" \
+    "$REPO_DIR/build" \
+    "$REPO_DIR/install" \
+    "$REPO_DIR/log"
+
+sudo -u "$CURRENT_USER" \
+    HOME="$USER_HOME" \
+    USER="$CURRENT_USER" \
+    PATH="$USER_HOME/.local/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    CUDACXX="/usr/local/cuda/bin/nvcc" \
+    LD_LIBRARY_PATH="/usr/local/cuda/lib64:$CUDSS_LIB:/usr/lib/aarch64-linux-gnu" \
+    bash -c "
+        set -e
+        set +u
+        source /opt/ros/humble/setup.bash
+        set -u
+        cd '$REPO_DIR'
+
+        python3 - <<'PY'
+import packaging
+import setuptools
+
+print('[update] Python packaging:', packaging.__version__, packaging.__file__)
+print('[update] setuptools:', setuptools.__version__, setuptools.__file__)
+PY
+
+        colcon build \
+            --symlink-install \
+            --packages-skip xsens_mti_ros2_driver \
+            --parallel-workers 2 \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release
+    "
 
 # ── 5b. Restart tankervision after build ──────────────────────────
 restart_svc tankervision.service

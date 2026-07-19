@@ -1,6 +1,100 @@
 #!/bin/bash
 set -e
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ $EUID -eq 0 ]]; then
+    echo "[install] ERROR: Run this installer as the normal user:"
+    echo "[install]   ./install.sh"
+    echo "[install] Do not run: sudo ./install.sh"
+    exit 1
+fi
+
+echo "[install] Installing Python dependencies..."
+
+python3 -m pip install --user \
+    "numpy<2" \
+    gps \
+    "setuptools<80" \
+    "packaging>=22,<26"
+
+echo "[install] Installing Jetson PyTorch for CUDA 12.6..."
+
+python3 -m pip install --user \
+    --index-url https://pypi.jetson-ai-lab.io/jp6/cu126 \
+    torch \
+    torchvision
+
+# Torch requires cuDSS. Do not allow this package to pull its own
+# CUDA 12.9/cuBLAS dependencies.
+python3 -m pip install --user --no-deps \
+    nvidia-cudss-cu12
+
+echo "[install] Locating cuDSS runtime..."
+
+CUDSS_FILE="$(
+    find "$HOME/.local/lib/python3.10/site-packages" \
+        -name 'libcudss.so.0' \
+        -print \
+        -quit
+)"
+
+if [[ -z "$CUDSS_FILE" ]]; then
+    echo "[install] ERROR: libcudss.so.0 was not found."
+    exit 1
+fi
+
+CUDSS_LIB="$(dirname "$CUDSS_FILE")"
+
+echo "[install] cuDSS library directory: $CUDSS_LIB"
+
+# Use JetPack's CUDA libraries first, then the pip-installed cuDSS library.
+# Do not append an inherited LD_LIBRARY_PATH because it may contain
+# incompatible CUDA libraries.
+export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$CUDSS_LIB:/usr/lib/aarch64-linux-gnu"
+
+echo "[install] Installing Ultralytics dependencies..."
+
+python3 -m pip install --user \
+    matplotlib \
+    pillow \
+    pyyaml \
+    requests \
+    scipy \
+    psutil \
+    polars \
+    ultralytics-thop \
+    nvidia-ml-py
+
+# Prevent Ultralytics from replacing Jetson's Torch/Torchvision.
+python3 -m pip install --user --no-deps \
+    "ultralytics==8.4.102"
+
+echo "[install] Validating PyTorch CUDA support..."
+
+python3 - <<'PY'
+import sys
+
+import torch
+import ultralytics
+
+print("[install] Torch:", torch.__version__)
+print("[install] Torch CUDA:", torch.version.cuda)
+print("[install] CUDA available:", torch.cuda.is_available())
+print("[install] Ultralytics:", ultralytics.__version__)
+
+if not torch.cuda.is_available():
+    print("[install] ERROR: PyTorch cannot access the Jetson GPU.")
+    sys.exit(1)
+
+print("[install] GPU:", torch.cuda.get_device_name(0))
+
+x = torch.ones((16, 16), device="cuda")
+print("[install] CUDA allocation test:", x.sum().item())
+print("[install] cuBLAS test:", (x @ x)[0, 0].item())
+
+print("[install] PyTorch CUDA validation passed.")
+PY
 
 echo "[install] Detecting camera network interface..."
 # Find PCI ethernet - starts with 'en' but not 'enx' (USB) 
@@ -16,9 +110,6 @@ sudo apt install -y chrony gpsd gpsd-clients linuxptp arp-scan \
     mergerfs \
     libopencv-dev ros-humble-cv-bridge ros-humble-nmea-msgs \
     ros-humble-v4l2-camera ros-humble-topic-tools
-
-# Python dependencies
-pip3 install "numpy<2" ultralytics gps
 
 echo "[install] Deploying configs..."
 
