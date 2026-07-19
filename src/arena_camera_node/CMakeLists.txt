@@ -62,6 +62,7 @@ find_package(std_srvs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(arena_sdk REQUIRED)
 find_package(CUDAToolkit REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc)
 
 # ------------
 # EXPORT DEPS
@@ -159,7 +160,7 @@ ament_target_dependencies(${target_name}  rclcpp
                                           sensor_msgs
                                           arena_sdk
                                           )
-target_link_libraries(${target_name} CUDA::cudart)
+target_link_libraries(${target_name} CUDA::cudart ${OpenCV_LIBRARIES})
 
 # MV EXEC to lib dir
 install(TARGETS

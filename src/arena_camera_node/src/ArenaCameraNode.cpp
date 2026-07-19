@@ -18,6 +18,7 @@
 #include <std_msgs/msg/string.hpp>
 #include "ArenaCameraNode.h"
 #include "bayer_downscale_cuda.h"
+#include <opencv2/imgproc.hpp>
 #include "light_arena/deviceinfo_helper.h"
 #include "rclcpp_adapter/pixelformat_translation.h"
 #include "rclcpp_adapter/quilty_of_service_translation.cpp"
@@ -117,6 +118,14 @@ void ArenaCameraNode::parse_parameters_()
       throw std::runtime_error("publish_downscale_factor must be a positive even number");
     }
     publish_downscale_factor_ = static_cast<size_t>(publish_downscale_factor);
+
+    nextParameterToDeclare = "sim_target_width";
+    sim_target_width_ = static_cast<size_t>(
+        this->declare_parameter<int>("sim_target_width", 0));
+
+    nextParameterToDeclare = "sim_target_height";
+    sim_target_height_ = static_cast<size_t>(
+        this->declare_parameter<int>("sim_target_height", 0));
 
   } catch (rclcpp::ParameterTypeException& e) {
     log_err(nextParameterToDeclare + " argument");
@@ -544,14 +553,21 @@ void ArenaCameraNode::publish_images_()
 
       const size_t width  = pImage->GetWidth();
       const size_t height = pImage->GetHeight();
-      if (width != 5320 || height != 4600) {
+      const bool sim_mode = (sim_target_width_ > 0 && sim_target_height_ > 0);
+      if (!sim_mode && (width != 5320 || height != 4600)) {
         log_warn(
             "Unexpected image size: " + std::to_string(width) + "x" + std::to_string(height) +
             ", expected 5320x4600");
       }
 
       const uint64_t bits_per_pixel = pImage->GetBitsPerPixel();
-      if (bits_per_pixel != 16) {
+      if (sim_mode) {
+        if (bits_per_pixel != 24) {
+          log_warn(
+              "Unexpected raw image depth: " + std::to_string(bits_per_pixel) +
+              " bpp, expected 24 bpp RGB8 (brigid sim mode)");
+        }
+      } else if (bits_per_pixel != 16) {
         log_warn(
             "Unexpected raw image depth: " + std::to_string(bits_per_pixel) +
             " bpp, expected 16 bpp BayerRG");
@@ -565,18 +581,51 @@ void ArenaCameraNode::publish_images_()
       PublishFrame frame;
       frame.stamp = image_stamp;
       frame.frame_id = frame_id;
-      frame.width = width;
-      frame.height = height;
       frame.get_image_ms = get_image_ms;
       frame.raw_save_ms = raw_save_ms;
 
       const auto copy_start = std::chrono::steady_clock::now();
-      const size_t pixel_count = width * height;
-      frame.bayer.resize(pixel_count);
-      std::memcpy(
-          frame.bayer.data(),
-          reinterpret_cast<const uint16_t*>(image_data),
-          pixel_count * sizeof(uint16_t));
+      if (sim_mode) {
+        // Brigid sim: center-crop RGB8 input to deployment AR, upscale to
+        // deployment dimensions, then encode as RGGB16 so the downstream CUDA
+        // bayer pipeline runs identically to production units.
+        const int sim_w = static_cast<int>(sim_target_width_);
+        const int sim_h = static_cast<int>(sim_target_height_);
+        const int in_w  = static_cast<int>(width);
+        const int in_h  = static_cast<int>(height);
+        const int crop_w =
+            static_cast<int>(static_cast<double>(in_h) * sim_w / sim_h);
+        const int x_off = (in_w - crop_w) / 2;
+
+        cv::Mat rgb_in(in_h, in_w, CV_8UC3, const_cast<void*>(image_data));
+        cv::Mat cropped = rgb_in(cv::Rect(x_off, 0, crop_w, in_h));
+        cv::Mat resized;
+        cv::resize(cropped, resized, cv::Size(sim_w, sim_h), 0.0, 0.0, cv::INTER_LINEAR);
+
+        frame.width  = static_cast<size_t>(sim_w);
+        frame.height = static_cast<size_t>(sim_h);
+        frame.bayer.resize(static_cast<size_t>(sim_w * sim_h));
+        for (int row = 0; row < sim_h; ++row) {
+          const uint8_t* src = resized.ptr<uint8_t>(row);
+          uint16_t* dst = frame.bayer.data() + row * sim_w;
+          for (int col = 0; col < sim_w; ++col) {
+            // RGGB pattern: R at (even,even), G at mixed, B at (odd,odd)
+            const uint8_t ch = ((row & 1) == 0)
+                ? (((col & 1) == 0) ? src[col * 3 + 0] : src[col * 3 + 1])
+                : (((col & 1) == 0) ? src[col * 3 + 1] : src[col * 3 + 2]);
+            dst[col] = static_cast<uint16_t>(ch) << bayer_raw_shift_;
+          }
+        }
+      } else {
+        frame.width  = width;
+        frame.height = height;
+        const size_t pixel_count = width * height;
+        frame.bayer.resize(pixel_count);
+        std::memcpy(
+            frame.bayer.data(),
+            reinterpret_cast<const uint16_t*>(image_data),
+            pixel_count * sizeof(uint16_t));
+      }
       frame.raw_copy_ms = elapsed_ms(copy_start, std::chrono::steady_clock::now());
       const double raw_copy_ms = frame.raw_copy_ms;
       frame.queued_at = std::chrono::steady_clock::now();

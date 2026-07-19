@@ -1,0 +1,27 @@
+mode: testing
+location: Ontario
+
+# Camera: Lucid Vision Labs Triton 5.4MP HDR (TRI054S-CC)
+#   2880x1860, RGB8 output — different sensor and pixel format from the
+#   production Triton2 24MP (5320x4600, BayerRG16).
+#   sim_target_width/height instructs arena_camera_node to center-crop and
+#   upscale the RGB8 buffer to 5320x4600 and re-encode it as RGGB16, so the
+#   downstream CUDA bayer pipeline is identical to deployed flight units.
+lucid_camera:
+  width: 2880
+  height: 1860
+  pixelformat: rgb8
+  exposure_time: 2000.0
+  exposure_auto: 'Off'
+  gain_auto: 'Off'
+  hardware_trigger: false   # brigid has no external trigger hardware — free-run at acquisition_frame_rate
+  acquisition_frame_rate_enable: true
+  acquisition_frame_rate: 1.0
+  qos_reliability: reliable
+  bayer_raw_shift: 8
+  publish_downscale_factor: 8
+  sim_target_width: 5320
+  sim_target_height: 4600
+
+analog_camera:
+  enabled: false

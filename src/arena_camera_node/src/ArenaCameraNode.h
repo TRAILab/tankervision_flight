@@ -126,6 +126,8 @@ class ArenaCameraNode : public rclcpp::Node
   std::atomic<uint64_t> publish_timing_frame_count_{0};
   int bayer_raw_shift_{8};
   size_t publish_downscale_factor_{8};
+  size_t sim_target_width_{0};   // brigid sim: upscale RGB8 to this width before bayer encode (0 = disabled)
+  size_t sim_target_height_{0};  // brigid sim: upscale RGB8 to this height before bayer encode (0 = disabled)
 
   // ROI
   size_t width_{0};

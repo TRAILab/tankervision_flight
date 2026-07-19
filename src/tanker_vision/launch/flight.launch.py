@@ -76,8 +76,8 @@ def _node_params() -> list:
 
 
 def _launch_lucid_camera(_):
-    cfg   = _load_cfg()
-    lucid = cfg.get('lucid_camera', {})
+    cfg    = _load_cfg()
+    lucid  = cfg.get('lucid_camera', {})
     ht_cfg = lucid.get('hardware_trigger', False)
     ht_bool = (ht_cfg is True) or (str(ht_cfg).lower() == 'true')
     node = Node(
@@ -95,6 +95,7 @@ def _launch_lucid_camera(_):
             {'hardware_trigger':          ht_bool},
             {'acquisition_frame_rate_enable': _as_bool(lucid.get('acquisition_frame_rate_enable', True), True)},
             {'acquisition_frame_rate':     float(lucid.get('acquisition_frame_rate', 1.0))},
+            {'exposure_time':             float(lucid.get('exposure_time',        8000.0))},
             {'exposure_auto':             lucid.get('exposure_auto',             'Continuous')},
             {'gain_auto':                 lucid.get('gain_auto',                 'Continuous')},
             {'target_brightness':         int(lucid.get('target_brightness',      70))},
@@ -104,6 +105,8 @@ def _launch_lucid_camera(_):
             {'exposure_auto_algorithm':   lucid.get('exposure_auto_algorithm',   'Mean')},
             {'exposure_auto_damping':     float(lucid.get('exposure_auto_damping', 89.8))},
             {'raw_save_root':             cfg.get('storage', {}).get('root', '/mnt/storage')},
+            {'sim_target_width':          int(lucid.get('sim_target_width',    0))},
+            {'sim_target_height':         int(lucid.get('sim_target_height',   0))},
         ],
         remappings=[('/arena_camera_node/images', '/cam0/image_raw')],
     )
@@ -113,6 +116,9 @@ def _launch_lucid_camera(_):
 def _launch_analog_camera(_):
     cfg      = _load_cfg()
     analog   = cfg.get('analog_camera', {})
+    if not _as_bool(analog.get('enabled', True), True):
+        print('[flight.launch] analog_camera.enabled=false — analog camera will NOT be launched')
+        return []
     standard = analog.get('standard', 'NTSC').upper()
     device   = analog.get('device', '/dev/video0')
     if standard not in _VIDEO_STANDARDS:
@@ -170,6 +176,8 @@ def _launch_maxvis_record_node(_):
     cfg  = _load_cfg()
     mode = cfg.get('mode', 'testing')
     if mode != 'flight':
+        return []
+    if not _as_bool(cfg.get('analog_camera', {}).get('enabled', True), True):
         return []
     record_fps = float(cfg.get('maxvis_recording', {}).get('record_fps', 1.0))
     throttle_node = Node(
